@@ -6,15 +6,14 @@
  * and web server endpoints for configuration and control.
  */
 
-#include "esp_wifi.h"
+#include "Wifi.h"
+
 #include "esp_event.h"
 #include "nvs_flash.h"
 #include "nvs.h"
-#include "esp_http_server.h"
 #include "esp_mac.h"      // for MAC2STR macro
 #include "dns_server.h"   // for captive portal DNS hijack
 #include "lwip/inet.h"
-#include <sys/param.h>    // for MIN macro
 #include "mdns.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -27,8 +26,6 @@
 #include "esp_vfs_fat.h"
 
 #include <dirent.h>
-
-#include "Wifi.h"
 
 #pragma region Variables & Config
 
