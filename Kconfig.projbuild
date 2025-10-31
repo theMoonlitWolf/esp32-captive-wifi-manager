@@ -1,0 +1,88 @@
+menu "WiFi Component Configuration"
+
+choice
+    prompt "WiFi component log level"
+    default LOG_LEVEL_WIFI_INFO
+    help
+        Select the log level for the WiFi component.
+
+    config LOG_LEVEL_WIFI_NONE
+        bool "None"
+    config LOG_LEVEL_WIFI_ERROR
+        bool "Error"
+    config LOG_LEVEL_WIFI_WARN
+        bool "Warn"
+    config LOG_LEVEL_WIFI_INFO
+        bool "Info"
+    config LOG_LEVEL_WIFI_DEBUG
+        bool "Debug"
+    config LOG_LEVEL_WIFI_VERBOSE
+        bool "Verbose"
+endchoice
+
+config LOG_LEVEL_WIFI
+    int
+    default 0 if LOG_LEVEL_WIFI_NONE
+    default 1 if LOG_LEVEL_WIFI_ERROR
+    default 2 if LOG_LEVEL_WIFI_WARN
+    default 3 if LOG_LEVEL_WIFI_INFO
+    default 4 if LOG_LEVEL_WIFI_DEBUG
+    default 5 if LOG_LEVEL_WIFI_VERBOSE
+    help
+        Internal value for WiFi log level (used in code).
+
+config WIFI_MAX_RECONNECTS
+    int "Maximum reconnect attempts before switching to AP captive portal mode"
+    default 5
+    help
+        Maximum reconnect attempts in standard operation mode before switching to AP mode and launching captive portal.
+
+config WIFI_SCAN_MAX_APS
+    int "Maximum number of APs to store from a scan"
+    default 8
+    help
+        Maximum number of Access Points to store from a WiFi scan. APs are sorted by signal strength (RSSI).
+
+config PIN_WIFI_SD_MOSI
+    int "SD card MOSI pin"
+    default 11
+    help
+        GPIO pin number for the SD card MOSI line.
+
+config PIN_WIFI_SD_MISO
+    int "SD card MISO pin"
+    default 13
+    help
+        GPIO pin number for the SD card MISO line.
+
+config PIN_WIFI_SD_SCK
+    int "SD card SCK pin"
+    default 12
+    help
+        GPIO pin number for the SD card SCK line.
+
+config PIN_WIFI_SD_CS
+    int "SD card CS pin"
+    default 10
+    help
+        GPIO pin number for the SD card chip select (CS) line.
+
+config WIFI_FORMAT_SD_ON_FAIL
+    bool "Format SD card if mount fails"
+    default n
+    help
+        If enabled, the SD card will be formatted if mounting fails. This is useful for development but should be used with caution in production.
+
+config WIFI_USE_SK6812_STATUS_LED
+    bool "Use SK6812 LED for WiFi status indication"
+    default y
+    help
+        If enabled, an SK6812 LED will be used to indicate WiFi status.
+
+config PIN_WIFI_STATUS_LED
+    depends on WIFI_USE_SK6812_STATUS_LED
+    int "GPIO pin for SK6812 status LED"
+    default 45
+    help
+        GPIO pin number where the SK6812 status LED is connected.
+endmenu
