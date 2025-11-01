@@ -74,14 +74,18 @@
   </form>
   <script>
     function changedAuthmodeDisp(sel) {
+      console.log('Changed authmode');
       const pwdField = document.getElementById('password');
-      if (sel.type.toLowerCase() !== 'select') {
+      //if (sel.type.toLowerCase() !== 'select') {
+      if (!sel.options || !sel.options[sel.selectedIndex].getAttribute('data-authmode')) {
         document.getElementById('username_field').style.display = 'none';
         document.getElementById('password_field').style.display = 'block';
         document.getElementById('authmode').value = '';
+        console.warn('Authmode changed, but sel has no options or no data-authmode found');
         return;
       }
       const authmode = Number(sel.options[sel.selectedIndex].getAttribute('data-authmode'));
+      console.log('Selected SSID Authmode:', authmode);
       if (authmode === 0) {
         document.getElementById('username_field').style.display = 'none';
         document.getElementById('password_field').style.display = 'none';
@@ -103,15 +107,22 @@
       document.getElementById('mdns_fields').style.display = cb.checked ? 'block' : 'none';
     }
     function getSSIDs(sel, authmode) {
-      fetch('/scan.json')
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      fetch('/scan.json', { signal: controller.signal })
         .then(resp => resp.json())
         .then(data => {
-          const ssids = (data.aps || []).map(ap => ap.ssid);
-          console.log('Scanned SSIDs:', ssids);
+          clearTimeout(timeoutId);
+          console.log('Scanned APs:', data.aps || []);
           scanFailReset(sel);
           populateSSIDs(data.aps || [], sel, authmode);
         })
-        .catch(() => handleScanFail(sel));
+        .catch((error) => {
+          clearTimeout(timeoutId);
+          console.error('Scan failed:', error);
+          handleScanFail(sel);
+        });
     }
     function populateSSIDs(scans, sel, authmode) {
       let ssidSelect = document.getElementById('ssid');
@@ -120,16 +131,17 @@
       scans.forEach(scan => {
         const opt = document.createElement('option');
         opt.value = scan.ssid;
-        opt.textContent = scan.ssid + ' RSSI: ' + scan.rssi + 'dBm, Auth: ' + scan.authmode;
-        opt.setAttribute('data-authmode', scan.authmode);
-        if (scan.ssid === sel && scan.authmode === authmode) { opt.selected = true; found = true; }
+        opt.textContent = scan.ssid + ' RSSI: ' + scan.rssi + 'dBm, Auth: ' + Number(scan.authmode);
+        opt.setAttribute('data-authmode', Number(scan.authmode));
+        if (scan.ssid === sel && Number(scan.authmode) === Number(authmode)) { console.log('Found matching SSID:', scan.ssid); opt.selected = true; found = true; }
         ssidSelect.appendChild(opt);
       });
       if (!found && sel) {
         const opt = document.createElement('option');
         opt.value = sel;
-        opt.textContent = sel + ' (unavailable)';
+        opt.textContent = sel + ' (unavailable), Auth: ' + Number(authmode);
         opt.selected = true;
+        opt.setAttribute('data-authmode', Number(authmode));
         ssidSelect.appendChild(opt);
       }
       if (!found && !sel) {
