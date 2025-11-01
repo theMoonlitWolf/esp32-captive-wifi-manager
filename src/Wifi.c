@@ -26,6 +26,7 @@
 #include "esp_vfs_fat.h"
 
 #include <dirent.h>
+#include <errno.h>
 
 #pragma region Variables & Config
 
@@ -212,6 +213,9 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id
  */
 esp_err_t wifi_init() {
     esp_log_level_set(TAG, CONFIG_LOG_LEVEL_WIFI); // Set log level for WiFi component
+    esp_log_level_set(TAG_CAPTIVE, CONFIG_LOG_LEVEL_WIFI); // Set log level for captive portal
+    esp_log_level_set(TAG_SD, CONFIG_LOG_LEVEL_WIFI); // Set log level for SD card component
+
     ESP_LOGI(TAG, "Initializing WiFi...");
 
     // Configure LED indicator
@@ -345,7 +349,6 @@ esp_err_t mount_sd_card() {
         return ret;
     }
 
-    ESP_LOGI(TAG_SD, "SD card mounted successfully");
     SD_card_present = true;
 
     DIR *dir = opendir(SD_CARD_MOUNT_POINT);
@@ -1245,7 +1248,7 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
 
     FILE *f = fopen(filepath, "r");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open file: %s", filepath);
+        ESP_LOGE(TAG, "Failed to open file: %s (%s)", filepath, strerror(errno));
         return not_found_handler(req, HTTPD_404_NOT_FOUND);
     }
 

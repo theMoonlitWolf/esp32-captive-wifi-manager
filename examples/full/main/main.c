@@ -48,7 +48,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
 void app_main(void)
 {
     // Set log level
-    esp_log_level_set("*", ESP_LOG_DEBUG);
+    esp_log_level_set("*", CONFIG_LOG_DEFAULT_LEVEL);
     ESP_LOGI(TAG, "START %s from %s", __FILE__, __DATE__);
     ESP_LOGI(TAG, "Setting up...");
 
