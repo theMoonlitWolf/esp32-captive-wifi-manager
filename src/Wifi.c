@@ -1030,6 +1030,8 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
                     ESP_LOGD(TAG_CAPTIVE, "Username changed, reconnecting...");
                 }
                 strcpy((char*)&captive_cfg.username, param);
+            } else {
+                strcpy((char*)&captive_cfg.username, "");
             }
         }
         if (httpd_query_key_value(buf, "password", param, sizeof(param)) == ESP_OK) {
@@ -1041,6 +1043,8 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
                     ESP_LOGD(TAG_CAPTIVE, "Password changed, reconnecting...");
                 }
                 strcpy((char*)&captive_cfg.password, param);
+            } else {
+                strcpy((char*)&captive_cfg.password, "");
             }
         }
         if (captive_cfg.authmode == (uint8_t)-1) {
