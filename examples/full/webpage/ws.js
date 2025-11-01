@@ -78,11 +78,11 @@ function sendWSBinary(type, value) {
         const view = new DataView(buffer);
         view.setUint8(0, type);
         view.setInt16(1, value, true); // true for little-endian
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(buffer);
-        } else {
-            console.warn('WebSocket not open, message not sent: ', buffer);
-        }
+        ws.send(buffer);
+        console.log('Sent binary message: ', { type, value }, 'buffer: ', buffer);
+
+    } else {
+        console.warn('WebSocket not open, message not sent: ', buffer);
     }
 }
 
@@ -92,6 +92,9 @@ function sendWSEvent(eventType) {
         const view = new DataView(buffer);
         view.setUint8(0, eventType);
         ws.send(buffer);
+        console.log('Sent event message: ', eventType, 'buffer: ', buffer);
+    } else {
+        console.warn('WebSocket not open, message not sent: ', buffer);
     }
 }
 

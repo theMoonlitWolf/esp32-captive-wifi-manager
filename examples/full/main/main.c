@@ -28,7 +28,7 @@ typedef enum {
 
 // Binary control packet structure
 typedef struct __attribute__((packed)) {
-    ws_value_type_t type;  // Control type (1 byte)
+    uint8_t type;  // Control type (1 byte)
     int16_t value;       // Control value (2 bytes)
 } ws_control_packet_t;
 
@@ -179,10 +179,13 @@ esp_err_t ws_handler(httpd_req_t *req) {
             case SLIDER_BINARY:
                 sliderBinaryValue = (uint8_t)(packet->value & 0xFF);
                 ESP_LOGI(TAG, "Binary slider updated to %d", sliderBinaryValue);
+                break;
             case SLIDER_JSON:
                 ESP_LOGW(TAG, "JSON slider is not supposed to be handled in binary packets");
+                break;
             default:
                 ESP_LOGW(TAG, "Unknown packet type: 0x%2X, value: 0x%4X", packet->type, packet->value);
+                break;
         }
         free(ws_pkt.payload);
         return ESP_OK;
@@ -206,7 +209,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
         ESP_RETURN_ON_ERROR(ret, TAG, "Failed to receive ws packet");
     }
 
-    ESP_LOGI(TAG, "Received WebSocket text payload: %s", (char*)ws_pkt.payload);
+    ESP_LOGD(TAG, "Received WebSocket text payload: %s", (char*)ws_pkt.payload);
 
     // Try to parse as JSON
     // Basic JSON parsing for {"slider": number}
@@ -222,8 +225,12 @@ esp_err_t ws_handler(httpd_req_t *req) {
             int value = atoi(start);
             sliderJSONValue = value & 0x3FF; // Clamp to 10 bits (0-1023)
             ESP_LOGI(TAG, "JSON slider updated to %d", sliderJSONValue);
+            free(ws_pkt.payload);
+            return ESP_OK;
         }
     }
+
+    ESP_LOGI(TAG, "Received WebSocket text: %s", (char*)ws_pkt.payload);
 
     free(ws_pkt.payload);
     return ESP_OK;

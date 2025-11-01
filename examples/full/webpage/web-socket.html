@@ -47,7 +47,7 @@
     // Binary slider change handling
     function sendSliderBinary(value) {
       document.getElementById('sliderBinValue').textContent = value;
-      sendWSBinaryControl(WS_value.SLIDER_BINARY, value);
+      sendWSBinary(WS_value.SLIDER_BINARY, value);
     }
     // Event listener for slider input
     document.getElementById('sliderBin').addEventListener('input', e => {
@@ -76,7 +76,7 @@
 
     function update() {
       if (ws.readyState === WebSocket.OPEN) {
-        sendWSEvent(WS_value.RELOAD);
+        sendWSEvent(WS_event.EVENT_RELOAD);
       } else {
         console.warn('WebSocket not connected, reloading from JSON');
         fetch('/status.json')
