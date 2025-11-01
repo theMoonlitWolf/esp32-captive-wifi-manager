@@ -26,6 +26,7 @@
 #include "esp_vfs_fat.h"
 
 #include <dirent.h>
+#include <errno.h>
 
 #pragma region Variables & Config
 
@@ -61,8 +62,8 @@ esp_netif_t *ap_netif, *sta_netif;
 
 
 // HTML page binary symbols (linked at build time, defined in CMakeLists.txt)
-extern const char captive_portal_html_start[] asm("_binary_captive_portal_html_start");
-extern const char captive_portal_html_end[] asm("_binary_captive_portal_html_end");
+extern const char captive_html_start[] asm("_binary_captive_html_start");
+extern const char captive_html_end[] asm("_binary_captive_html_end");
 
 enum {
     BLINK_OFF = 0,
@@ -183,11 +184,10 @@ void register_captive_portal_handlers(void);
 
 // HTTP request handlers
 esp_err_t captive_redirect(httpd_req_t* req, httpd_err_code_t error);
-esp_err_t captive_portal_handler(httpd_req_t* req);
-esp_err_t captive_portal_post_handler(httpd_req_t* req);
+esp_err_t captive_handler(httpd_req_t* req);
+esp_err_t captive_post_handler(httpd_req_t* req);
 esp_err_t captive_json_handler(httpd_req_t* req);
 esp_err_t scan_json_handler(httpd_req_t* req);
-void url_decode(char *str);
 
 esp_err_t not_found_handler(httpd_req_t* req, httpd_err_code_t error);
 
@@ -212,6 +212,9 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id
  */
 esp_err_t wifi_init() {
     esp_log_level_set(TAG, CONFIG_LOG_LEVEL_WIFI); // Set log level for WiFi component
+    esp_log_level_set(TAG_CAPTIVE, CONFIG_LOG_LEVEL_WIFI); // Set log level for captive portal
+    esp_log_level_set(TAG_SD, CONFIG_LOG_LEVEL_WIFI); // Set log level for SD card component
+
     ESP_LOGI(TAG, "Initializing WiFi...");
 
     // Configure LED indicator
@@ -345,7 +348,6 @@ esp_err_t mount_sd_card() {
         return ret;
     }
 
-    ESP_LOGI(TAG_SD, "SD card mounted successfully");
     SD_card_present = true;
 
     DIR *dir = opendir(SD_CARD_MOUNT_POINT);
@@ -503,19 +505,19 @@ void wifi_init_sta() {
 void register_captive_portal_handlers(void) {
     if (server == NULL) return;
 
-    httpd_uri_t captive_portal_uri = {
-        .uri = "/captive_portal",
+    httpd_uri_t captive_uri = {
+        .uri = "/captive",
         .method = HTTP_GET,
-        .handler = captive_portal_handler
+        .handler = captive_handler
     };
-    httpd_register_uri_handler(server, &captive_portal_uri);
+    httpd_register_uri_handler(server, &captive_uri);
 
-    httpd_uri_t captive_portal_post_uri = {
-        .uri = "/captive_portal",
+    httpd_uri_t captive_post_uri = {
+        .uri = "/captive",
         .method = HTTP_POST,
-        .handler = captive_portal_post_handler
+        .handler = captive_post_handler
     };
-    httpd_register_uri_handler(server, &captive_portal_post_uri);
+    httpd_register_uri_handler(server, &captive_post_uri);
 
     httpd_uri_t captive_json_uri = {
         .uri = "/captive.json",
@@ -869,10 +871,10 @@ void wifi_event_group_listener_task(void *pvParameter) {
 /**
  * @brief HTTP handler for serving the captive portal HTML page.
  */
-esp_err_t captive_portal_handler(httpd_req_t *req) {
+esp_err_t captive_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    const uint32_t captive_portal_html_len = captive_portal_html_end - captive_portal_html_start;
-    httpd_resp_send(req, (const char *)captive_portal_html_start, captive_portal_html_len);
+    const uint32_t captive_html_len = captive_html_end - captive_html_start;
+    httpd_resp_send(req, (const char *)captive_html_start, captive_html_len);
     ESP_LOGD(TAG_CAPTIVE, "Captive portal page served");
     return ESP_OK;
 }
@@ -882,7 +884,7 @@ esp_err_t captive_portal_handler(httpd_req_t *req) {
  */
 esp_err_t captive_redirect(httpd_req_t *req, httpd_err_code_t error) {
     httpd_resp_set_status(req, "302 Temporary Redirect");
-    httpd_resp_set_hdr(req, "Location", "/captive_portal");
+    httpd_resp_set_hdr(req, "Location", "/captive");
     httpd_resp_send(req, "Redirected to captive portal", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
@@ -891,60 +893,60 @@ esp_err_t captive_redirect(httpd_req_t *req, httpd_err_code_t error) {
  * @brief HTTP handler for scanning available WiFi networks and returning JSON results.
  */
 esp_err_t scan_json_handler(httpd_req_t *req) {
-        char json[700];
-        uint16_t ap_count = 0;
-        wifi_scan_config_t scan_config = {
-            .show_hidden = true,
-            .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-            .scan_time.active.min = 0,
-            .scan_time.active.max = 0
-        };
-        ESP_ERROR_CHECK(esp_wifi_scan_start(&scan_config, true));
-        ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
-        ESP_LOGD(TAG_CAPTIVE, "Found %d access points", ap_count);
-        if (ap_count > CONFIG_WIFI_SCAN_MAX_APS) {
-            ap_count = CONFIG_WIFI_SCAN_MAX_APS;
-            ESP_LOGD(TAG_CAPTIVE, "Limiting to %d access points", ap_count);
-        }
-        wifi_ap_record_t ap_records[CONFIG_WIFI_SCAN_MAX_APS];
-        ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&ap_count, ap_records));
+    char json[700];
+    uint16_t ap_count = 0;
+    wifi_scan_config_t scan_config = {
+        .show_hidden = true,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active.min = 0,
+        .scan_time.active.max = 0
+    };
+    ESP_ERROR_CHECK(esp_wifi_scan_start(&scan_config, true));
+    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
+    ESP_LOGD(TAG_CAPTIVE, "Found %d access points", ap_count);
+    if (ap_count > CONFIG_WIFI_SCAN_MAX_APS) {
+        ap_count = CONFIG_WIFI_SCAN_MAX_APS;
+        ESP_LOGD(TAG_CAPTIVE, "Limiting to %d access points", ap_count);
+    }
+    wifi_ap_record_t ap_records[CONFIG_WIFI_SCAN_MAX_APS];
+    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&ap_count, ap_records));
 
-        int len = snprintf(json, sizeof(json), "{\"ap_count\": %d, \"aps\": [", ap_count);
-        for (int i = 0; i < ap_count; i++) {
-            char ssid[33];
-            uint8_t authmode;
-            snprintf(ssid, sizeof(ssid), "%s", ap_records[i].ssid);
-            if (ap_records[i].authmode == WIFI_AUTH_OPEN || ap_records[i].authmode == WIFI_AUTH_OWE || ap_records[i].authmode == WIFI_AUTH_DPP) {
-                authmode = 0;
-            } else if (ap_records[i].authmode == WIFI_AUTH_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA2_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA3_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA2_WPA3_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA3_ENT_192 || ap_records[i].authmode == WIFI_AUTH_WPA_ENTERPRISE) {
-                authmode = 2;
-            } else {
-                authmode = 1;
-            }
-            len += snprintf(json + len, sizeof(json) - len,
-            "%s{\"ssid\": \"%s\", \"rssi\": %d, \"authmode\": %d}",
-                (i > 0) ? "," : "",
-                ssid,
-                ap_records[i].rssi,
-                authmode);
-            if (len < 0 || len >= sizeof(json)) {
-                // Buffer full, truncate
-                break;
-            }
-        }
-        if ((len + 2) < sizeof(json)) {
-            json[len++] = ']';
-            json[len++] = '}';
-            json[len] = '\0';
+    int len = snprintf(json, sizeof(json), "{\"ap_count\": %d, \"aps\": [", ap_count);
+    for (int i = 0; i < ap_count; i++) {
+        char ssid[33];
+        uint8_t authmode;
+        snprintf(ssid, sizeof(ssid), "%s", ap_records[i].ssid);
+        if (ap_records[i].authmode == WIFI_AUTH_OPEN || ap_records[i].authmode == WIFI_AUTH_OWE || ap_records[i].authmode == WIFI_AUTH_DPP) {
+            authmode = 0;
+        } else if (ap_records[i].authmode == WIFI_AUTH_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA2_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA3_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA2_WPA3_ENTERPRISE || ap_records[i].authmode == WIFI_AUTH_WPA3_ENT_192 || ap_records[i].authmode == WIFI_AUTH_WPA_ENTERPRISE) {
+            authmode = 2;
         } else {
-            // Buffer full, ensure valid JSON
-            strncpy(json + sizeof(json) - 3, "]}", 3);
-            json[sizeof(json) - 1] = '\0';
+            authmode = 1;
         }
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req, json, strlen(json));
-        ESP_LOGD(TAG_CAPTIVE, "Scan results sent: %s", json);
-        return ESP_OK;
+        len += snprintf(json + len, sizeof(json) - len,
+        "%s{\"ssid\": \"%s\", \"rssi\": %d, \"authmode\": %d}",
+            (i > 0) ? "," : "",
+            ssid,
+            ap_records[i].rssi,
+            authmode);
+        if (len < 0 || len >= sizeof(json)) {
+            // Buffer full, truncate
+            break;
+        }
+    }
+    if ((len + 2) < sizeof(json)) {
+        json[len++] = ']';
+        json[len++] = '}';
+        json[len] = '\0';
+    } else {
+        // Buffer full, ensure valid JSON
+        strncpy(json + sizeof(json) - 3, "]}", 3);
+        json[sizeof(json) - 1] = '\0';
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, strlen(json));
+    ESP_LOGD(TAG_CAPTIVE, "Scan results sent: %s", json);
+    return ESP_OK;
 }
 
 /**
@@ -975,18 +977,20 @@ esp_err_t captive_json_handler(httpd_req_t *req) {
  * 
  * Parses POST data, updates config, and triggers reconnect or mDNS update as needed.
  */
-esp_err_t captive_portal_post_handler(httpd_req_t *req) {
+esp_err_t captive_post_handler(httpd_req_t *req) {
     char buf[256];
     int len = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
     bool need_reconnect = false;
     bool need_mdns_update = false;
     wifi_mode_t mode;
     ESP_ERROR_CHECK(esp_wifi_get_mode(&mode));
+    ESP_LOGD(TAG_CAPTIVE, "Received captive portal POST data: %.*s", len, buf);
     if (len > 0) {
         buf[len] = '\0';
         char param[32];
         if (httpd_query_key_value(buf, "ssid", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed SSID: %s", param);
             if (strcmp((char*)&captive_cfg.ssid, param) != 0) {
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
@@ -996,20 +1000,28 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
             }
         }
         if (httpd_query_key_value(buf, "authmode", param, sizeof(param)) == ESP_OK) {
-            int new_authmode = atoi(param);
-            if (new_authmode < 0 || new_authmode > 2) {
-                new_authmode = 0; // default to open
-            }
-            if (captive_cfg.authmode != new_authmode) {
-                if (mode == WIFI_MODE_STA) {
-                    need_reconnect = true;
-                    ESP_LOGD(TAG_CAPTIVE, "Authmode changed, reconnecting...");
+            if (strcmp(param, "") == 0) {
+                ESP_LOGD(TAG_CAPTIVE, "Authmode empty");
+                captive_cfg.authmode = (uint8_t)-1;
+            } else {
+                int new_authmode = atoi(param);
+                ESP_LOGD(TAG_CAPTIVE, "Parsed Authmode: %d", new_authmode);
+                if (new_authmode < 0 || new_authmode > 2) {
+                    new_authmode = 1; // default to WPA/WPA2-Personal
+                    ESP_LOGD(TAG_CAPTIVE, "Authmode out of range, defaulting to WPA/WPA2-Personal");
                 }
+                if (captive_cfg.authmode != new_authmode) {
+                    if (mode == WIFI_MODE_STA) {
+                        need_reconnect = true;
+                        ESP_LOGD(TAG_CAPTIVE, "Authmode changed, reconnecting...");
+                    }
+                }
+                captive_cfg.authmode = new_authmode;
             }
-            captive_cfg.authmode = new_authmode;
         }
         if (httpd_query_key_value(buf, "username", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed Username: %s", param);
             if (captive_cfg.authmode == 2 && strlen(param) != 0 && strcmp((char*)&captive_cfg.username, param) != 0) {
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
@@ -1020,6 +1032,7 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
         }
         if (httpd_query_key_value(buf, "password", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed Password: %s", param);
             if (captive_cfg.authmode != 0 && strlen(param) != 0 && strcmp((char*)&captive_cfg.password, param) != 0) {
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
@@ -1028,8 +1041,22 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
                 strcpy((char*)&captive_cfg.password, param);
             }
         }
+        if (captive_cfg.authmode == (uint8_t)-1) {
+            if (captive_cfg.password[0] != 0) {
+                if (mode == WIFI_MODE_STA) {
+                    need_reconnect = true;
+                    ESP_LOGD(TAG_CAPTIVE, "Invalid authmode corrected to WPA/WPA2-Personal, password is not empty, reconnecting...");
+                }
+            } else {
+                if (mode == WIFI_MODE_STA) {
+                    need_reconnect = true;
+                    ESP_LOGD(TAG_CAPTIVE, "Invalid authmode corrected to Open, password is empty, reconnecting...");
+                }
+            }
+        }
         if (httpd_query_key_value(buf, "use_static_ip", param, sizeof(param)) == ESP_OK) {
             bool new_use_static_ip = strcmp(param, "true") == 0;
+            ESP_LOGD(TAG_CAPTIVE, "Parsed Use Static IP: %s", param);
             if (captive_cfg.use_static_ip != new_use_static_ip) {
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
@@ -1048,6 +1075,7 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
         }
         if (httpd_query_key_value(buf, "static_ip", param, sizeof(param)) == ESP_OK) {
             uint32_t new_ip = inet_addr(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed Static IP: %s", param);
             if (captive_cfg.static_ip.addr != new_ip && captive_cfg.use_static_ip) {
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
@@ -1058,6 +1086,7 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
         }
         if (httpd_query_key_value(buf, "use_mDNS", param, sizeof(param)) == ESP_OK) {
             bool new_use_mdns = strcmp(param, "true") == 0;
+            ESP_LOGD(TAG_CAPTIVE, "Parsed Use mDNS: %s", param);
             if (captive_cfg.use_mDNS != new_use_mdns) {
                 if (mode == WIFI_MODE_STA) {
                     need_mdns_update = true;
@@ -1076,6 +1105,7 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
         }
         if (httpd_query_key_value(buf, "mDNS_hostname", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed mDNS Hostname: %s", param);
             if ((strcmp(captive_cfg.mDNS_hostname, param) != 0)) {
                 if (captive_cfg.use_mDNS) {
                     if (mode == WIFI_MODE_STA) {
@@ -1088,6 +1118,7 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
         }
         if (httpd_query_key_value(buf, "service_name", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed Service Name: %s", param);
             if ((strcmp(captive_cfg.service_name, param) != 0)) {
                 if (captive_cfg.use_mDNS) {
                     if (mode == WIFI_MODE_STA) {
@@ -1126,7 +1157,7 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
         
         // Redirect back to captive portal, method GET
         httpd_resp_set_status(req, "302 Temporary Redirect");
-        httpd_resp_set_hdr(req, "Location", "/captive_portal");
+        httpd_resp_set_hdr(req, "Location", "/captive");
         httpd_resp_send(req, "Redirected", HTTPD_RESP_USE_STRLEN);
         ESP_LOGV(TAG_CAPTIVE, "Redirecting to back captive portal, method GET");
         return ESP_OK;
@@ -1136,6 +1167,14 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
     }
 }
 
+
+/**
+ * @brief Decode a URL-encoded string in place.
+ * 
+ * @param str The URL-encoded string to decode.
+ * 
+ * This function modifies the input string directly to decode it.
+ */
 void url_decode(char *str) {
     char *src = str, *dst = str;
     while (*src) {
@@ -1245,7 +1284,7 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
 
     FILE *f = fopen(filepath, "r");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open file: %s", filepath);
+        ESP_LOGE(TAG, "Failed to open file: %s (%s)", filepath, strerror(errno));
         return not_found_handler(req, HTTPD_404_NOT_FOUND);
     }
 
