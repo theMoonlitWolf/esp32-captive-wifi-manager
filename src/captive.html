@@ -116,6 +116,7 @@
     function populateSSIDs(scans, sel, authmode) {
       let ssidSelect = document.getElementById('ssid');
       let found = false;
+      ssidSelect.innerHTML = '';
       scans.forEach(scan => {
         const opt = document.createElement('option');
         opt.value = scan.ssid;
