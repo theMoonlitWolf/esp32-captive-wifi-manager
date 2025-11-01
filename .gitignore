@@ -7,20 +7,16 @@ managed_components/
 **/managed_components/
 
 # ESP-IDF config and lock files
-dependencies.lock
 **/dependencies.lock
-sdkconfig
 **/sdkconfig
-sdkconfig.old
 **/sdkconfig.old
 
 # IDE specific
-.vscode/.browse.c_cpp.db*
-.vscode/settings.json
-.vscode/launch.json
-.vscode/settings.json
-.vscode/ipch/
-.devcontainer/
+**/.vscode/.browse.c_cpp.db*
+**/.vscode/settings.json
+**/.vscode/launch.json
+**/.vscode/ipch/
+**/.devcontainer/
 
 # Temp files
 .DS_Store

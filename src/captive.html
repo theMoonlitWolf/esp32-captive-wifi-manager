@@ -22,7 +22,7 @@
 </head>
 <body>
   <h2>ESP32 Captive Portal Setup</h2>
-  <form method="POST" action="/captive_portal">
+  <form method="POST" action="/captive">
     <div id="dataWarn" style="display:none; color:red; margin-top:1em;">
       ⚠️ Failed to load settings. Please check your connection.
     </div>
@@ -116,6 +116,7 @@
     function populateSSIDs(scans, sel, authmode) {
       let ssidSelect = document.getElementById('ssid');
       let found = false;
+      ssidSelect.innerHTML = '';
       scans.forEach(scan => {
         const opt = document.createElement('option');
         opt.value = scan.ssid;

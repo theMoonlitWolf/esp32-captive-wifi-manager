@@ -32,4 +32,6 @@ typedef esp_err_t (*wifi_http_handler_t)(httpd_req_t *r);
 esp_err_t wifi_register_http_handler(httpd_uri_t *uri);
 void wifi_set_led_rgb(uint32_t irgb, uint8_t brightness);
 
+void url_decode(char *str);
+
 #endif
