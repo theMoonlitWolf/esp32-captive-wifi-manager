@@ -188,7 +188,6 @@ esp_err_t captive_handler(httpd_req_t* req);
 esp_err_t captive_post_handler(httpd_req_t* req);
 esp_err_t captive_json_handler(httpd_req_t* req);
 esp_err_t scan_json_handler(httpd_req_t* req);
-void url_decode(char *str);
 
 esp_err_t not_found_handler(httpd_req_t* req, httpd_err_code_t error);
 
@@ -1139,6 +1138,14 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
     }
 }
 
+
+/**
+ * @brief Decode a URL-encoded string in place.
+ * 
+ * @param str The URL-encoded string to decode.
+ * 
+ * This function modifies the input string directly to decode it.
+ */
 void url_decode(char *str) {
     char *src = str, *dst = str;
     while (*src) {
