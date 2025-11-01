@@ -61,8 +61,8 @@ esp_netif_t *ap_netif, *sta_netif;
 
 
 // HTML page binary symbols (linked at build time, defined in CMakeLists.txt)
-extern const char captive_portal_html_start[] asm("_binary_captive_portal_html_start");
-extern const char captive_portal_html_end[] asm("_binary_captive_portal_html_end");
+extern const char captive_html_start[] asm("_binary_captive_html_start");
+extern const char captive_html_end[] asm("_binary_captive_html_end");
 
 enum {
     BLINK_OFF = 0,
@@ -183,8 +183,8 @@ void register_captive_portal_handlers(void);
 
 // HTTP request handlers
 esp_err_t captive_redirect(httpd_req_t* req, httpd_err_code_t error);
-esp_err_t captive_portal_handler(httpd_req_t* req);
-esp_err_t captive_portal_post_handler(httpd_req_t* req);
+esp_err_t captive_handler(httpd_req_t* req);
+esp_err_t captive_post_handler(httpd_req_t* req);
 esp_err_t captive_json_handler(httpd_req_t* req);
 esp_err_t scan_json_handler(httpd_req_t* req);
 void url_decode(char *str);
@@ -503,19 +503,19 @@ void wifi_init_sta() {
 void register_captive_portal_handlers(void) {
     if (server == NULL) return;
 
-    httpd_uri_t captive_portal_uri = {
-        .uri = "/captive_portal",
+    httpd_uri_t captive_uri = {
+        .uri = "/captive",
         .method = HTTP_GET,
-        .handler = captive_portal_handler
+        .handler = captive_handler
     };
-    httpd_register_uri_handler(server, &captive_portal_uri);
+    httpd_register_uri_handler(server, &captive_uri);
 
-    httpd_uri_t captive_portal_post_uri = {
-        .uri = "/captive_portal",
+    httpd_uri_t captive_post_uri = {
+        .uri = "/captive",
         .method = HTTP_POST,
-        .handler = captive_portal_post_handler
+        .handler = captive_post_handler
     };
-    httpd_register_uri_handler(server, &captive_portal_post_uri);
+    httpd_register_uri_handler(server, &captive_post_uri);
 
     httpd_uri_t captive_json_uri = {
         .uri = "/captive.json",
@@ -869,10 +869,10 @@ void wifi_event_group_listener_task(void *pvParameter) {
 /**
  * @brief HTTP handler for serving the captive portal HTML page.
  */
-esp_err_t captive_portal_handler(httpd_req_t *req) {
+esp_err_t captive_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    const uint32_t captive_portal_html_len = captive_portal_html_end - captive_portal_html_start;
-    httpd_resp_send(req, (const char *)captive_portal_html_start, captive_portal_html_len);
+    const uint32_t captive_html_len = captive_html_end - captive_html_start;
+    httpd_resp_send(req, (const char *)captive_html_start, captive_html_len);
     ESP_LOGD(TAG_CAPTIVE, "Captive portal page served");
     return ESP_OK;
 }
@@ -882,7 +882,7 @@ esp_err_t captive_portal_handler(httpd_req_t *req) {
  */
 esp_err_t captive_redirect(httpd_req_t *req, httpd_err_code_t error) {
     httpd_resp_set_status(req, "302 Temporary Redirect");
-    httpd_resp_set_hdr(req, "Location", "/captive_portal");
+    httpd_resp_set_hdr(req, "Location", "/captive");
     httpd_resp_send(req, "Redirected to captive portal", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
@@ -975,7 +975,7 @@ esp_err_t captive_json_handler(httpd_req_t *req) {
  * 
  * Parses POST data, updates config, and triggers reconnect or mDNS update as needed.
  */
-esp_err_t captive_portal_post_handler(httpd_req_t *req) {
+esp_err_t captive_post_handler(httpd_req_t *req) {
     char buf[256];
     int len = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
     bool need_reconnect = false;
@@ -1126,7 +1126,7 @@ esp_err_t captive_portal_post_handler(httpd_req_t *req) {
         
         // Redirect back to captive portal, method GET
         httpd_resp_set_status(req, "302 Temporary Redirect");
-        httpd_resp_set_hdr(req, "Location", "/captive_portal");
+        httpd_resp_set_hdr(req, "Location", "/captive");
         httpd_resp_send(req, "Redirected", HTTPD_RESP_USE_STRLEN);
         ESP_LOGV(TAG_CAPTIVE, "Redirecting to back captive portal, method GET");
         return ESP_OK;
