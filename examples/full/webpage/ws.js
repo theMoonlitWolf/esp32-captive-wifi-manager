@@ -8,7 +8,8 @@ const WS_event = {
 
 const WS_value = {
     VALUE_NONE: 0,
-    SLIDER_BINARY: 1
+    SLIDER_BINARY: 1,
+    SLIDER_JSON: 2
 }
 
 let ws = {}

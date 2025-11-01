@@ -75,7 +75,31 @@
     });
 
     function update() {
-      sendWSEvent(WS_value.RELOAD);
+      if (ws.readyState === WebSocket.OPEN) {
+        sendWSEvent(WS_value.RELOAD);
+      } else {
+        console.warn('WebSocket not connected, reloading from JSON');
+        fetch('/status.json')
+          .then(response => response.json())
+          .then(data => {
+            // Update sliders from JSON data
+            if (data.slider !== undefined) {
+              const sliderJson = document.getElementById('sliderJson');
+              const sliderJsonValue = document.getElementById('sliderJsonValue');
+              sliderJson.value = data.slider;
+              sliderJsonValue.textContent = data.slider;
+            }
+            if (data.slider_binary !== undefined) {
+              const sliderBin = document.getElementById('sliderBin');
+              const sliderBinValue = document.getElementById('sliderBinValue');
+              sliderBin.value = data.slider_binary;
+              sliderBinValue.textContent = data.slider_binary;
+            }
+          })
+          .catch(error => {
+            console.error('Error fetching status JSON:', error);
+          });
+      }
     }
 
     // Handle incoming binary messages (pre-parsed by ws.js into type and value)
@@ -84,11 +108,20 @@
         case WS_value.SLIDER_BINARY:
           // clamp to 0..255 for the binary slider control
           let val = Math.max(0, Math.min(255, value));
-          const slider = document.getElementById('sliderb');
-          const sliderv = document.getElementById('sliderbv');
-          if (slider) slider.value = val;
-          if (sliderv) sliderv.textContent = val;
+          const sliderb = document.getElementById('sliderBin');
+          const sliderbv = document.getElementById('sliderBinValue');
+          if (sliderb) sliderb.value = val;
+          if (sliderbv) sliderbv.textContent = val;
           console.log('Binary slider updated to', val);
+          break;
+        case WS_value.SLIDER_JSON:
+          // clamp to 0..1023 for the JSON slider control
+          let jval = Math.max(0, Math.min(1023, value));
+          const sliderj = document.getElementById('sliderJson');
+          const sliderjv = document.getElementById('sliderJsonValue');
+          if (sliderj) sliderj.value = jval;
+          if (sliderjv) sliderjv.textContent = jval;
+          console.log('JSON slider updated to', jval);
           break;
         default:
           console.log('Unknown binary message type', type);
