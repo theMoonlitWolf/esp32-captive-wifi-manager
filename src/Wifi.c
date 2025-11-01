@@ -674,17 +674,19 @@ wifi_config_t sta_wifi_config(captive_portal_config *cfg) {
     esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg);
 
     strcpy((char *)wifi_cfg.sta.ssid, cfg->ssid);
-    strcpy((char *)wifi_cfg.sta.password, cfg->password);
-    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-
-    // Set authmode for open networks
-    if (cfg->password[0] == '\0') {
+    if (cfg->authmode == 0) {
+        strcpy((char *)wifi_cfg.sta.password, "");
         wifi_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
-        ESP_LOGD(TAG, "STA config set: SSID: %s, open network (no password)", wifi_cfg.sta.ssid);
+        ESP_LOGD(TAG, "STA config set: Authmode: 0, SSID: %s, open network (no password)", wifi_cfg.sta.ssid);
+    } else if (cfg->authmode == 2) {
+        // enterprise
     } else {
+        strcpy((char *)wifi_cfg.sta.password, cfg->password);
         wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-        ESP_LOGD(TAG, "STA config set: SSID: %s, password: %s", wifi_cfg.sta.ssid, wifi_cfg.sta.password);
+        ESP_LOGD(TAG, "STA config set: Authmode: 1, SSID: %s, password: %s", wifi_cfg.sta.ssid, wifi_cfg.sta.password);
     }
+    
+    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
 
     return wifi_cfg;
 }
