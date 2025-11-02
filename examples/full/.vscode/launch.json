@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "gdbtarget",
+      "request": "attach",
+      "name": "Eclipse CDT GDB Adapter",
+      "program": "${workspaceFolder}/build/${command:espIdf.getProjectName}.elf",
+      "initCommands": [
+        "set remote hardware-watchpoint-limit 2",
+        "mon reset halt",
+        "maintenance flush register-cache",
+        "thb app_main",
+        "c"
+      ],
+      "gdb": "${command:espIdf.getToolchainGdb}",
+      "target": {
+        "connectCommands": [
+          "set remotetimeout 20",
+          "-target-select extended-remote localhost:3333"
+        ]
+      }
+    }
+  ]
+}

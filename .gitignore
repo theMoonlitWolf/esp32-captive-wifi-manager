@@ -11,13 +11,6 @@ managed_components/
 **/sdkconfig
 **/sdkconfig.old
 
-# IDE specific
-**/.vscode/.browse.c_cpp.db*
-**/.vscode/settings.json
-**/.vscode/launch.json
-**/.vscode/ipch/
-**/.devcontainer/
-
 # Temp files
 .DS_Store
 Thumbs.db
@@ -29,3 +22,6 @@ Thumbs.db
 *.bin
 *.elf
 *.map
+
+# Logs
+*.log
