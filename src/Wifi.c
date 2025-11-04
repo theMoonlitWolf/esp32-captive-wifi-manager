@@ -678,8 +678,6 @@ wifi_config_t sta_wifi_config(captive_portal_config *cfg) {
         strcpy((char *)wifi_cfg.sta.password, "");
         wifi_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
         ESP_LOGD(TAG, "STA config set: Authmode: 0, SSID: %s, open network (no password)", wifi_cfg.sta.ssid);
-    } else if (cfg->authmode == 2) {
-        // enterprise
     } else {
         strcpy((char *)wifi_cfg.sta.password, cfg->password);
         wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
@@ -957,10 +955,9 @@ esp_err_t scan_json_handler(httpd_req_t *req) {
 esp_err_t captive_json_handler(httpd_req_t *req) {
     char json[512]; // max 330 bytes
     snprintf(json, sizeof(json),
-        "{\"ssid\": \"%s\", \"authmode\": %d, \"username\": \"%s\", \"password\": \"%s\", \"use_static_ip\": %s, \"static_ip\": \"%s\", \"use_mDNS\": %s, \"mDNS_hostname\": \"%s\", \"service_name\": \"%s\"}",
+        "{\"ssid\": \"%s\", \"authmode\": %d, \"password\": \"%s\", \"use_static_ip\": %s, \"static_ip\": \"%s\", \"use_mDNS\": %s, \"mDNS_hostname\": \"%s\", \"service_name\": \"%s\"}",
         captive_cfg.ssid,
         captive_cfg.authmode,
-        captive_cfg.username,
         captive_cfg.password,
         captive_cfg.use_static_ip ? "true" : "false",
         inet_ntoa(captive_cfg.static_ip.addr),
@@ -1008,8 +1005,14 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
             } else {
                 int new_authmode = atoi(param);
                 ESP_LOGD(TAG_CAPTIVE, "Parsed Authmode: %d", new_authmode);
-                if (new_authmode < 0 || new_authmode > 2) {
-                    new_authmode = 1; // default to WPA/WPA2-Personal
+                if (new_authmode == 2) {
+                    ESP_LOGW(TAG_CAPTIVE, "Enterprise networks (authmode 2) are not supported, ignoring");
+                    httpd_resp_set_status(req, "400 Bad Request");
+                    httpd_resp_send(req, "Enterprise networks not supported", HTTPD_RESP_USE_STRLEN);
+                    return ESP_OK;
+                }
+                if (new_authmode < 0 || new_authmode > 1) {
+                    new_authmode = 1; // default to WPA/WPA2-PSK
                     ESP_LOGD(TAG_CAPTIVE, "Authmode out of range, defaulting to WPA/WPA2-Personal");
                 }
                 if (captive_cfg.authmode != new_authmode) {
@@ -1019,19 +1022,6 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
                     }
                 }
                 captive_cfg.authmode = new_authmode;
-            }
-        }
-        if (httpd_query_key_value(buf, "username", param, sizeof(param)) == ESP_OK) {
-            url_decode(param);
-            ESP_LOGD(TAG_CAPTIVE, "Parsed Username: %s", param);
-            if (captive_cfg.authmode == 2 && strlen(param) != 0 && strcmp((char*)&captive_cfg.username, param) != 0) {
-                if (mode == WIFI_MODE_STA) {
-                    need_reconnect = true;
-                    ESP_LOGD(TAG_CAPTIVE, "Username changed, reconnecting...");
-                }
-                strcpy((char*)&captive_cfg.username, param);
-            } else {
-                strcpy((char*)&captive_cfg.username, "");
             }
         }
         if (httpd_query_key_value(buf, "password", param, sizeof(param)) == ESP_OK) {
@@ -1049,11 +1039,13 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
         }
         if (captive_cfg.authmode == (uint8_t)-1) {
             if (captive_cfg.password[0] != 0) {
+                captive_cfg.authmode = 1; // WPA/WPA2-PSK
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
                     ESP_LOGD(TAG_CAPTIVE, "Invalid authmode corrected to WPA/WPA2-Personal, password is not empty, reconnecting...");
                 }
             } else {
+                captive_cfg.authmode = 0; // Open
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
                     ESP_LOGD(TAG_CAPTIVE, "Invalid authmode corrected to Open, password is empty, reconnecting...");

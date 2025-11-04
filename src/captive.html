@@ -18,12 +18,13 @@
       display: flex; justify-content: center; align-items: center; line-height: 1;
     }
     .ssid-row { display: flex; gap: 0.5em; align-items: center; }
+    .warning { color: orange; margin-top: 0.5em; font-size: 0.9em; display: none; }
     </style>
 </head>
 <body>
   <h2>ESP32 Captive Portal Setup</h2>
   <form method="POST" action="/captive">
-    <div id="dataWarn" style="display:none; color:red; margin-top:1em;">
+    <div id="dataWarn" class="warning">
       ⚠️ Failed to load settings. Please check your connection.
     </div>
     <div class="section">
@@ -34,14 +35,13 @@
             </select>
             <button type="button" id="refreshBtn" title="Refresh Wi-Fi list">⟳</button>
         </div>
-        <div id="scanWarn" style="display:none; color:red; margin-top:1em;">
+        <div id="scanWarn" class="warning">
           ⚠️ Wi-Fi scan failed. Please enter SSID manually if needed.
         </div>
+        <div id="enterpriseWarn" class="warning">
+          ⚠️ Enterprise networks are not supported. Please select a different network.
+        </div>
       </select>
-      <div id="username_field" style="display:none;">
-        <label for="username">Username:</label>
-        <input type="text" id="username" name="username">
-      </div>
       <div id="password_field" style="display:block;">
         <label for="password">Wi-Fi Password:</label>
         <input type="password" id="password" name="password">
@@ -75,29 +75,35 @@
   <script>
     function changedAuthmodeDisp(sel) {
       console.log('Changed authmode');
-      const pwdField = document.getElementById('password');
-      //if (sel.type.toLowerCase() !== 'select') {
+      const pwdField = document.getElementById('password_field');
+      const enterpriseWarn = document.getElementById('enterpriseWarn');
+      const saveBtn = document.getElementById('saveBtn');
+      
       if (!sel.options || !sel.options[sel.selectedIndex].getAttribute('data-authmode')) {
-        document.getElementById('username_field').style.display = 'none';
-        document.getElementById('password_field').style.display = 'block';
+        pwdField.style.display = 'block';
+        enterpriseWarn.style.display = 'none';
         document.getElementById('authmode').value = '';
+        saveBtn.disabled = false;
         console.warn('Authmode changed, but sel has no options or no data-authmode found');
         return;
       }
       const authmode = Number(sel.options[sel.selectedIndex].getAttribute('data-authmode'));
       console.log('Selected SSID Authmode:', authmode);
       if (authmode === 0) {
-        document.getElementById('username_field').style.display = 'none';
-        document.getElementById('password_field').style.display = 'none';
+        pwdField.style.display = 'none';
+        enterpriseWarn.style.display = 'none';
         document.getElementById('authmode').value = 0;
+        saveBtn.disabled = false;
       } else if (authmode === 2) {
-        document.getElementById('username_field').style.display = 'block';
-        document.getElementById('password_field').style.display = 'block';
+        pwdField.style.display = 'none';
+        enterpriseWarn.style.display = 'block';
         document.getElementById('authmode').value = 2;
+        saveBtn.disabled = true;
       } else {
-        document.getElementById('username_field').style.display = 'none';
-        document.getElementById('password_field').style.display = 'block';
+        pwdField.style.display = 'block';
+        enterpriseWarn.style.display = 'none';
         document.getElementById('authmode').value = 1;
+        saveBtn.disabled = false;
       }
     }
     function toggleStaticIP(cb) {
@@ -131,7 +137,8 @@
       scans.forEach(scan => {
         const opt = document.createElement('option');
         opt.value = scan.ssid;
-        opt.textContent = scan.ssid + ' RSSI: ' + scan.rssi + 'dBm, Auth: ' + Number(scan.authmode);
+        const authmodeLabel = Number(scan.authmode) === 0 ? 'Open' : (Number(scan.authmode) === 2 ? 'Enterprise' : 'WPA/WPA2');
+        opt.textContent = scan.ssid + ' RSSI: ' + scan.rssi + 'dBm, Auth: ' + authmodeLabel;
         opt.setAttribute('data-authmode', Number(scan.authmode));
         if (scan.ssid === sel && Number(scan.authmode) === Number(authmode)) { console.log('Found matching SSID:', scan.ssid); opt.selected = true; found = true; }
         ssidSelect.appendChild(opt);
@@ -139,7 +146,8 @@
       if (!found && sel) {
         const opt = document.createElement('option');
         opt.value = sel;
-        opt.textContent = sel + ' (unavailable), Auth: ' + Number(authmode);
+        const authmodeLabel = Number(authmode) === 0 ? 'Open' : (Number(authmode) === 2 ? 'Enterprise' : 'WPA/WPA2');
+        opt.textContent = sel + ' (unavailable), Auth: ' + authmodeLabel;
         opt.selected = true;
         opt.setAttribute('data-authmode', Number(authmode));
         ssidSelect.appendChild(opt);
@@ -208,10 +216,6 @@
           if (cfg.password) {
             document.getElementById('password').value = '';
             document.getElementById('password').placeholder = '(unchanged)';
-          }
-          if (cfg.authmode === 2 && cfg.username) {
-            document.getElementById('username_field').style.display = 'block';
-            document.getElementById('username').value = cfg.username || '';
           }
           changedAuthmodeDisp(document.getElementById('ssid'));
           document.getElementById('use_static_ip').checked = !!cfg.use_static_ip;
