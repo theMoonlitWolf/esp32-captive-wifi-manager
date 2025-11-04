@@ -9,6 +9,8 @@
     form{background:#fff;padding:2em;border-radius:8px;max-width:400px;margin:auto}
     label{display:block;margin-top:1em}
     input[type=text],input[type=password],select{width:96%;padding:.5em}
+    select#ssid{font-size:1em;color:#333}
+    select#ssid option{font-size:0.95em}
     .section{margin-bottom:1.5em}
     button{margin-top:1.5em;padding:.7em 2em}
     #refreshBtn{margin:0;padding:0;font-size:1em;height:1.8em;width:1.8em;min-width:0;border-radius:20%;display:flex;justify-content:center;align-items:center}
@@ -90,7 +92,7 @@
         const o=document.createElement('option');
         o.value=ap.ssid;
         const l=ap.authmode===0?'Open':ap.authmode===2?'Enterprise':'WPA/WPA2';
-        o.textContent=`${ap.ssid} RSSI: ${ap.rssi}dBm, Auth: ${l}`;
+        o.textContent=`${ap.ssid}  (${ap.rssi}dBm, ${l})`;
         o.setAttribute('data-authmode',ap.authmode);
         if(ap.ssid===sel&&ap.authmode==auth){o.selected=true;found=true}
         s.appendChild(o);
@@ -99,7 +101,7 @@
         const o=document.createElement('option');
         const l=auth===0?'Open':auth===2?'Enterprise':'WPA/WPA2';
         o.value=sel;
-        o.textContent=`${sel} (unavailable), Auth: ${l}`;
+        o.textContent=`${sel}  (unavailable, ${l})`;
         o.selected=true;
         o.setAttribute('data-authmode',auth);
         s.appendChild(o);
