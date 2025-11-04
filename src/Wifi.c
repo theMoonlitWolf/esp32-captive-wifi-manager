@@ -380,6 +380,12 @@ void wifi_init_captive() {
     wifi_cfg = sta_wifi_config(&captive_cfg);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+    
+    int8_t max_tx_power;
+    ESP_ERROR_CHECK(esp_wifi_get_max_tx_power(&max_tx_power));
+    ESP_LOGI(TAG, "Max TX power is %d, setting to 44 (11dBm) for AP mode", max_tx_power);
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(44)); // 44 = 11dBm (~5-10m range)
+
 
     // Log AP IP address
     esp_netif_ip_info_t ip_info;
