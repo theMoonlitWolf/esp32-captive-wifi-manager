@@ -9,8 +9,8 @@
     form{background:#fff;padding:2em;border-radius:8px;max-width:400px;margin:auto}
     label{display:block;margin-top:1em}
     input[type=text],input[type=password],select{width:96%;padding:.5em}
-    select#ssid{font-size:1em;color:#222;font-family:monospace}
-    select#ssid option{font-size:0.85em;color:#666;letter-spacing:0;display:block}
+    select#ssid{font-size:1em;color:#333}
+    select#ssid option{font-size:0.95em}
     .section{margin-bottom:1.5em}
     button{margin-top:1.5em;padding:.7em 2em}
     #refreshBtn{margin:0;padding:0;font-size:1em;height:1.8em;width:1.8em;min-width:0;border-radius:20%;display:flex;justify-content:center;align-items:center}
@@ -59,12 +59,6 @@
   </form>
   <script>
     const g=id=>document.getElementById(id);
-    const DROPDOWN_WIDTH=45; // Target character width for aligned dropdown options
-    function formatOption(ssid,meta){
-      const currentLen=ssid.length+meta.length;
-      const padding=' '.repeat(Math.max(1,DROPDOWN_WIDTH-currentLen));
-      return `${ssid}${padding}${meta}`;
-    }
     function toggle(id,show){g(id).style.display=show?'block':'none'}
     function updateAuthmode(sel){
       const pwd=g('password'),pwdfld=g('password_field'),ent=g('enterpriseWarn'),btn=g('saveBtn'),auth=g('authmode');
@@ -97,19 +91,17 @@
       aps.forEach(ap=>{
         const o=document.createElement('option');
         o.value=ap.ssid;
-        const l=ap.authmode===0?'open':ap.authmode===2?'enterprise':'wpa';
-        const meta=`${ap.rssi}dBm · ${l}`;
-        o.textContent=formatOption(ap.ssid,meta);
+        const l=ap.authmode===0?'Open':ap.authmode===2?'Enterprise':'WPA/WPA2';
+        o.textContent=`${ap.ssid}  (${ap.rssi}dBm, ${l})`;
         o.setAttribute('data-authmode',ap.authmode);
         if(ap.ssid===sel&&ap.authmode==auth){o.selected=true;found=true}
         s.appendChild(o);
       });
       if(!found&&sel){
         const o=document.createElement('option');
-        const l=auth===0?'open':auth===2?'enterprise':'wpa';
+        const l=auth===0?'Open':auth===2?'Enterprise':'WPA/WPA2';
         o.value=sel;
-        const meta=`unavailable · ${l}`;
-        o.textContent=formatOption(sel,meta);
+        o.textContent=`${sel}  (unavailable, ${l})`;
         o.selected=true;
         o.setAttribute('data-authmode',auth);
         s.appendChild(o);
