@@ -59,6 +59,12 @@
   </form>
   <script>
     const g=id=>document.getElementById(id);
+    const DROPDOWN_WIDTH=45; // Target character width for aligned dropdown options
+    function formatOption(ssid,meta){
+      const currentLen=ssid.length+meta.length;
+      const padding=' '.repeat(Math.max(1,DROPDOWN_WIDTH-currentLen));
+      return `${ssid}${padding}${meta}`;
+    }
     function toggle(id,show){g(id).style.display=show?'block':'none'}
     function updateAuthmode(sel){
       const pwd=g('password'),pwdfld=g('password_field'),ent=g('enterpriseWarn'),btn=g('saveBtn'),auth=g('authmode');
@@ -93,11 +99,7 @@
         o.value=ap.ssid;
         const l=ap.authmode===0?'open':ap.authmode===2?'enterprise':'wpa';
         const meta=`${ap.rssi}dBm · ${l}`;
-        // Align metadata to the right by padding with spaces (approx 45 chars total width)
-        const targetWidth=45;
-        const currentLen=ap.ssid.length+meta.length;
-        const padding=' '.repeat(Math.max(1,targetWidth-currentLen));
-        o.textContent=`${ap.ssid}${padding}${meta}`;
+        o.textContent=formatOption(ap.ssid,meta);
         o.setAttribute('data-authmode',ap.authmode);
         if(ap.ssid===sel&&ap.authmode==auth){o.selected=true;found=true}
         s.appendChild(o);
@@ -107,10 +109,7 @@
         const l=auth===0?'open':auth===2?'enterprise':'wpa';
         o.value=sel;
         const meta=`unavailable · ${l}`;
-        const targetWidth=45;
-        const currentLen=sel.length+meta.length;
-        const padding=' '.repeat(Math.max(1,targetWidth-currentLen));
-        o.textContent=`${sel}${padding}${meta}`;
+        o.textContent=formatOption(sel,meta);
         o.selected=true;
         o.setAttribute('data-authmode',auth);
         s.appendChild(o);
