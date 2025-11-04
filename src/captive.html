@@ -61,17 +61,22 @@
     function updateAuthmode(sel){
       const pwd=g('password_field'),ent=g('enterpriseWarn'),btn=g('saveBtn'),auth=g('authmode');
       if(!sel.options||!sel.options[sel.selectedIndex]||!sel.options[sel.selectedIndex].getAttribute('data-authmode')){
-        pwd.style.display='block';ent.style.display='none';auth.value='';btn.disabled=false;return;
+        pwd.style.display='block';ent.style.display='none';auth.value='';btn.disabled=false;
+        console.warn('updateAuthmode: no valid selection');
+        return;
       }
       const mode=+sel.options[sel.selectedIndex].getAttribute('data-authmode');
+      console.log('updateAuthmode: mode='+mode+', ssid='+sel.value);
       if(mode===0){pwd.style.display='none';ent.style.display='none';auth.value=0;btn.disabled=false}
       else if(mode===2){pwd.style.display='none';ent.style.display='block';auth.value=2;btn.disabled=true}
       else{pwd.style.display='block';ent.style.display='none';auth.value=1;btn.disabled=false}
     }
     function populateSSIDs(aps,sel,auth){
+      console.log('populateSSIDs: '+aps.length+' APs, looking for ssid='+sel+', auth='+auth);
       let s=g('ssid');
       // Reset to select if it was converted to input on previous scan fail
       if(s.tagName.toLowerCase()==='input'){
+        console.log('populateSSIDs: converting input back to select');
         const newSel=document.createElement('select');
         newSel.id='ssid';newSel.name='ssid';newSel.required=true;newSel.style.flex='1';
         newSel.onchange=function(){updateAuthmode(this)};
@@ -110,16 +115,20 @@
       updateAuthmode(s);
       g('saveBtn').textContent='Save & Connect';
       g('scanWarn').style.display='none';
+      console.log('populateSSIDs: complete, found='+found);
     }
     function getSSIDs(sel,auth){
+      console.log('getSSIDs: fetching scan.json for ssid='+sel);
       const ctrl=new AbortController();
       setTimeout(()=>ctrl.abort(),5000);
       fetch('/scan.json',{signal:ctrl.signal})
         .then(r=>r.json())
-        .then(d=>populateSSIDs(d.aps||[],sel,auth))
-        .catch(()=>{
+        .then(d=>{console.log('getSSIDs: received '+d.aps.length+' APs');populateSSIDs(d.aps||[],sel,auth)})
+        .catch(e=>{
+          console.error('getSSIDs: scan failed - '+e);
           let s=g('ssid');
           if(s.tagName.toLowerCase()==='select'){
+            console.log('getSSIDs: converting select to input for manual entry');
             const i=document.createElement('input');
             i.type='text';i.id='ssid';i.name='ssid';i.value=sel||'';i.placeholder='Enter SSID';i.required=false;
             s.parentNode.replaceChild(i,s);
@@ -129,10 +138,12 @@
         });
     }
     function loadSettings(){
+      console.log('loadSettings: fetching captive.json');
       g('dataWarn').style.display='none';
       fetch('/captive.json')
         .then(r=>r.json())
         .then(c=>{
+          console.log('loadSettings: loaded config - ssid='+c.ssid+', authmode='+c.authmode+', static_ip='+c.use_static_ip+', mDNS='+c.use_mDNS);
           getSSIDs(c.ssid||'',c.authmode||'');
           if(c.password){g('password').value='';g('password').placeholder='(unchanged)'}
           g('use_static_ip').checked=!!c.use_static_ip;
@@ -143,9 +154,9 @@
           g('service_name').value=c.service_name||'';
           toggle('mdns_fields',c.use_mDNS);
         })
-        .catch(()=>g('dataWarn').style.display='block');
+        .catch(e=>{console.error('loadSettings: failed - '+e);g('dataWarn').style.display='block'});
     }
-    g('refreshBtn').onclick=()=>{loadSettings();getSSIDs(g('ssid').value)};
+    g('refreshBtn').onclick=()=>{console.log('Refresh button clicked');loadSettings();getSSIDs(g('ssid').value)};
     window.onload=loadSettings;
   </script>
 </body>

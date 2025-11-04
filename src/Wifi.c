@@ -893,6 +893,7 @@ esp_err_t captive_redirect(httpd_req_t *req, httpd_err_code_t error) {
  * @brief HTTP handler for scanning available WiFi networks and returning JSON results.
  */
 esp_err_t scan_json_handler(httpd_req_t *req) {
+    ESP_LOGD(TAG_CAPTIVE, "Scan request received, starting WiFi scan...");
     char json[700];
     uint16_t ap_count = 0;
     wifi_scan_config_t scan_config = {
@@ -945,7 +946,7 @@ esp_err_t scan_json_handler(httpd_req_t *req) {
     }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, strlen(json));
-    ESP_LOGD(TAG_CAPTIVE, "Scan results sent: %s", json);
+    ESP_LOGD(TAG_CAPTIVE, "Scan results sent: %d APs; JSON: %s", ap_count, json);
     return ESP_OK;
 }
 
@@ -983,9 +984,10 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
     bool need_mdns_update = false;
     wifi_mode_t mode;
     ESP_ERROR_CHECK(esp_wifi_get_mode(&mode));
-    ESP_LOGD(TAG_CAPTIVE, "Received captive portal POST data: %.*s", len, buf);
+    ESP_LOGD(TAG_CAPTIVE, "Received POST: len=%d, mode=%d", len, mode);
     if (len > 0) {
         buf[len] = '\0';
+        ESP_LOGV(TAG_CAPTIVE, "POST data: %s", buf);
         char param[32];
         if (httpd_query_key_value(buf, "ssid", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
@@ -1006,7 +1008,7 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
                 int new_authmode = atoi(param);
                 ESP_LOGD(TAG_CAPTIVE, "Parsed Authmode: %d", new_authmode);
                 if (new_authmode == 2) {
-                    ESP_LOGW(TAG_CAPTIVE, "Enterprise networks (authmode 2) are not supported, ignoring");
+                    ESP_LOGW(TAG_CAPTIVE, "Enterprise networks (authmode 2) rejected");
                     httpd_resp_set_status(req, "400 Bad Request");
                     httpd_resp_send(req, "Enterprise networks not supported", HTTPD_RESP_USE_STRLEN);
                     return ESP_OK;
@@ -1130,16 +1132,8 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
     }
 
     // Log the updated captive portal settings
-    ESP_LOGD(TAG_CAPTIVE, "Captive portal settings saved");
-    ESP_LOGV(TAG_CAPTIVE, "SSID: %s", captive_cfg.ssid);
-    ESP_LOGV(TAG_CAPTIVE, "Password: %s", captive_cfg.password);
-    ESP_LOGV(TAG_CAPTIVE, "Use static IP: %s", captive_cfg.use_static_ip ? "true" : "false");
-    char ip_str[16];
-    inet_ntoa_r(captive_cfg.static_ip.addr, ip_str, 16);
-    ESP_LOGV(TAG_CAPTIVE, "Static IP: %s", ip_str);
-    ESP_LOGV(TAG_CAPTIVE, "Use mDNS: %s", captive_cfg.use_mDNS ? "true" : "false");
-    ESP_LOGV(TAG_CAPTIVE, "mDNS hostname: %s", captive_cfg.mDNS_hostname);
-    ESP_LOGV(TAG_CAPTIVE, "Service name: %s", captive_cfg.service_name);
+    ESP_LOGI(TAG_CAPTIVE, "Settings updated: SSID=%s, authmode=%d, static_ip=%d, mDNS=%d", 
+             captive_cfg.ssid, captive_cfg.authmode, captive_cfg.use_static_ip, captive_cfg.use_mDNS);
 
     // Save settings to NVS
     set_nvs_wifi_settings(&captive_cfg);
@@ -1160,6 +1154,7 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
         ESP_LOGV(TAG_CAPTIVE, "Redirecting to back captive portal, method GET");
         return ESP_OK;
     } else {
+        ESP_LOGI(TAG_CAPTIVE, "Switching to STA mode with new config");
         xEventGroupSetBits(wifi_event_group, SWITCH_TO_STA_BIT);
         return ESP_OK;
     }
