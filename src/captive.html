@@ -9,8 +9,8 @@
     form{background:#fff;padding:2em;border-radius:8px;max-width:400px;margin:auto}
     label{display:block;margin-top:1em}
     input[type=text],input[type=password],select{width:96%;padding:.5em}
-    select#ssid{font-size:1em;color:#222}
-    select#ssid option{font-size:0.85em;color:#666;letter-spacing:0}
+    select#ssid{font-size:1em;color:#222;font-family:monospace}
+    select#ssid option{font-size:0.85em;color:#666;letter-spacing:0;display:block}
     .section{margin-bottom:1.5em}
     button{margin-top:1.5em;padding:.7em 2em}
     #refreshBtn{margin:0;padding:0;font-size:1em;height:1.8em;width:1.8em;min-width:0;border-radius:20%;display:flex;justify-content:center;align-items:center}
@@ -92,8 +92,12 @@
         const o=document.createElement('option');
         o.value=ap.ssid;
         const l=ap.authmode===0?'open':ap.authmode===2?'enterprise':'wpa';
-        // Use tab character and compact format with smaller, grey text via CSS
-        o.textContent=`${ap.ssid}\t\t${ap.rssi}dBm · ${l}`;
+        const meta=`${ap.rssi}dBm · ${l}`;
+        // Align metadata to the right by padding with spaces (approx 45 chars total width)
+        const targetWidth=45;
+        const currentLen=ap.ssid.length+meta.length;
+        const padding=' '.repeat(Math.max(1,targetWidth-currentLen));
+        o.textContent=`${ap.ssid}${padding}${meta}`;
         o.setAttribute('data-authmode',ap.authmode);
         if(ap.ssid===sel&&ap.authmode==auth){o.selected=true;found=true}
         s.appendChild(o);
@@ -102,7 +106,11 @@
         const o=document.createElement('option');
         const l=auth===0?'open':auth===2?'enterprise':'wpa';
         o.value=sel;
-        o.textContent=`${sel}\t\tunavailable · ${l}`;
+        const meta=`unavailable · ${l}`;
+        const targetWidth=45;
+        const currentLen=sel.length+meta.length;
+        const padding=' '.repeat(Math.max(1,targetWidth-currentLen));
+        o.textContent=`${sel}${padding}${meta}`;
         o.selected=true;
         o.setAttribute('data-authmode',auth);
         s.appendChild(o);
