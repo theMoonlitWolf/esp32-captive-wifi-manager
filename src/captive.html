@@ -164,7 +164,6 @@
         .then(c=>{
           console.log('loadSettings: loaded config - ssid='+c.ssid+', authmode='+c.authmode+', static_ip='+c.use_static_ip+', mDNS='+c.use_mDNS);
           loadedSSID=c.ssid||''; // Store the loaded SSID
-          loadedHasPassword=!!c.password; // Store if password exists
           getSSIDs(c.ssid||'',c.authmode||'');
           if(c.password){g('password').value='';g('password').placeholder='(unchanged)'}
           g('use_static_ip').checked=!!c.use_static_ip;

@@ -988,6 +988,7 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
     int len = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
     bool need_reconnect = false;
     bool need_mdns_update = false;
+    bool ssid_changed = false;  // Track SSID change
     wifi_mode_t mode;
     ESP_ERROR_CHECK(esp_wifi_get_mode(&mode));
     ESP_LOGD(TAG_CAPTIVE, "Received POST: len=%d, mode=%d", len, mode);
@@ -999,6 +1000,7 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
             url_decode(param);
             ESP_LOGD(TAG_CAPTIVE, "Parsed SSID: %s", param);
             if (strcmp((char*)&captive_cfg.ssid, param) != 0) {
+                ssid_changed = true;  // Mark SSID as changed
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
                     ESP_LOGD(TAG_CAPTIVE, "SSID changed, reconnecting...");
@@ -1035,13 +1037,22 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
         if (httpd_query_key_value(buf, "password", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
             ESP_LOGD(TAG_CAPTIVE, "Parsed Password: %s", param);
-            if (captive_cfg.authmode != 0 && strlen(param) != 0 && strcmp((char*)&captive_cfg.password, param) != 0) {
+            
+            // Safety: If SSID changed and password is empty, reject the request
+            if (ssid_changed && strlen(param) == 0 && captive_cfg.authmode == 1) {
+                ESP_LOGW(TAG_CAPTIVE, "SSID changed but no password provided for WPA network");
+                httpd_resp_set_status(req, "400 Bad Request");
+                httpd_resp_send(req, "Password required for new network", HTTPD_RESP_USE_STRLEN);
+                return ESP_OK;
+            }
+            
+            if ((captive_cfg.authmode != 0 && strlen(param) != 0 && strcmp((char*)&captive_cfg.password, param) != 0) || captive_cfg.authmode == (uint8_t)-1) {
                 if (mode == WIFI_MODE_STA) {
                     need_reconnect = true;
                     ESP_LOGD(TAG_CAPTIVE, "Password changed, reconnecting...");
                 }
                 strcpy((char*)&captive_cfg.password, param);
-            } else {
+            } else if (captive_cfg.authmode == 0 && captive_cfg.authmode != (uint8_t)-1) {
                 strcpy((char*)&captive_cfg.password, "");
             }
         }
