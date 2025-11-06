@@ -603,6 +603,10 @@ void get_nvs_wifi_settings(captive_portal_config *cfg) {
         nvs_get_str(nvs_handle, "mDNS_hostname", cfg->mDNS_hostname, &len);
         len = sizeof(cfg->service_name);
         nvs_get_str(nvs_handle, "service_name", cfg->service_name, &len);
+        uint8_t mode_u8;
+        if (nvs_get_u8(nvs_handle, "wifi_mode", &mode_u8) == ESP_OK) {
+            cfg->wifi_mode = (wifi_mode_t)mode_u8;
+        }
         nvs_close(nvs_handle);
     } else {
         ESP_LOGW(TAG, "Failed to open NVS namespace: %s", esp_err_to_name(err));
@@ -656,6 +660,10 @@ void set_nvs_wifi_settings(captive_portal_config *cfg) {
         }
         if (strcmp(cfg->service_name, saved_cfg.service_name) != 0) {
             nvs_set_str(nvs_handle, "service_name", cfg->service_name);
+            n++;
+        }
+        if (cfg->wifi_mode != saved_cfg.wifi_mode) {
+            nvs_set_u8(nvs_handle, "wifi_mode", (uint8_t)cfg->wifi_mode);
             n++;
         }
         nvs_commit(nvs_handle);
@@ -749,6 +757,8 @@ void fill_captive_portal_config_struct(captive_portal_config *cfg) {
     strcpy(cfg->service_name, "");
     strcpy(cfg->ap_ssid, "");
     strcpy(cfg->ap_password, "");
+    cfg->authmode = 0;
+    cfg->wifi_mode = WIFI_MODE_STA;  // Default to station mode
 }
 
 #pragma endregion
@@ -965,9 +975,13 @@ esp_err_t scan_json_handler(httpd_req_t *req) {
  * @brief HTTP handler for returning saved captive portal configuration as JSON.
  */
 esp_err_t captive_json_handler(httpd_req_t *req) {
-    char json[512]; // max 330 bytes
+    char json[512];
+    const char *mode_str = "sta";
+    if (captive_cfg.wifi_mode == WIFI_MODE_AP) mode_str = "ap";
+    else if (captive_cfg.wifi_mode == WIFI_MODE_APSTA) mode_str = "apsta";
+    
     snprintf(json, sizeof(json),
-        "{\"ssid\": \"%s\", \"authmode\": %d, \"password\": \"%s\", \"use_static_ip\": %s, \"static_ip\": \"%s\", \"use_mDNS\": %s, \"mDNS_hostname\": \"%s\", \"service_name\": \"%s\"}",
+        "{\"ssid\": \"%s\", \"authmode\": %d, \"password\": \"%s\", \"use_static_ip\": %s, \"static_ip\": \"%s\", \"use_mDNS\": %s, \"mDNS_hostname\": \"%s\", \"service_name\": \"%s\", \"wifi_mode\": \"%s\", \"ap_ssid\": \"%s\", \"ap_password\": \"%s\"}",
         captive_cfg.ssid,
         captive_cfg.authmode,
         captive_cfg.password,
@@ -975,7 +989,10 @@ esp_err_t captive_json_handler(httpd_req_t *req) {
         inet_ntoa(captive_cfg.static_ip.addr),
         captive_cfg.use_mDNS ? "true" : "false",
         captive_cfg.mDNS_hostname,
-        captive_cfg.service_name
+        captive_cfg.service_name,
+        mode_str,
+        captive_cfg.ap_ssid,
+        captive_cfg.ap_password
     );
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, json, strlen(json));
@@ -993,7 +1010,8 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
     int len = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
     bool need_reconnect = false;
     bool need_mdns_update = false;
-    bool ssid_changed = false;  // Track SSID change
+    bool ssid_changed = false;
+    bool mode_changed = false;
     wifi_mode_t mode;
     ESP_ERROR_CHECK(esp_wifi_get_mode(&mode));
     ESP_LOGD(TAG_CAPTIVE, "Received POST: len=%d, mode=%d", len, mode);
@@ -1001,6 +1019,47 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
         buf[len] = '\0';
         ESP_LOGV(TAG_CAPTIVE, "POST data: %s", buf);
         char param[32];
+        
+        // Parse wifi_mode first
+        if (httpd_query_key_value(buf, "wifi_mode", param, sizeof(param)) == ESP_OK) {
+            url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed WiFi Mode: %s", param);
+            wifi_mode_t new_mode = WIFI_MODE_STA;
+            if (strcmp(param, "ap") == 0) {
+                new_mode = WIFI_MODE_AP;
+            } else if (strcmp(param, "apsta") == 0) {
+                new_mode = WIFI_MODE_APSTA;
+            }
+            if (captive_cfg.wifi_mode != new_mode) {
+                mode_changed = true;
+                captive_cfg.wifi_mode = new_mode;
+            }
+        }
+        
+        // Parse AP settings
+        if (httpd_query_key_value(buf, "ap_ssid", param, sizeof(param)) == ESP_OK) {
+            url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed AP SSID: %s", param);
+            if (strcmp(captive_cfg.ap_ssid, param) != 0) {
+                strcpy(captive_cfg.ap_ssid, param);
+                if (captive_cfg.wifi_mode == WIFI_MODE_AP || captive_cfg.wifi_mode == WIFI_MODE_APSTA) {
+                    mode_changed = true;
+                }
+            }
+        }
+        
+        if (httpd_query_key_value(buf, "ap_password", param, sizeof(param)) == ESP_OK) {
+            url_decode(param);
+            ESP_LOGD(TAG_CAPTIVE, "Parsed AP Password: %s", param);
+            // Only update if not empty (empty = unchanged)
+            if (strlen(param) > 0 && strcmp(captive_cfg.ap_password, param) != 0) {
+                strcpy(captive_cfg.ap_password, param);
+                if (captive_cfg.wifi_mode == WIFI_MODE_AP || captive_cfg.wifi_mode == WIFI_MODE_APSTA) {
+                    mode_changed = true;
+                }
+            }
+        }
+        
         if (httpd_query_key_value(buf, "ssid", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
             ESP_LOGD(TAG_CAPTIVE, "Parsed SSID: %s", param);
@@ -1160,26 +1219,29 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
     // Save settings to NVS
     set_nvs_wifi_settings(&captive_cfg);
 
-    if (mode == WIFI_MODE_STA) {
-        // Check if it is needed to reconnect to the AP or update and restart mDNS
+    // Determine action based on mode
+    if (mode_changed) {
+        ESP_LOGI(TAG_CAPTIVE, "WiFi mode changed to: %d", captive_cfg.wifi_mode);
+        if (captive_cfg.wifi_mode == WIFI_MODE_STA) {
+            xEventGroupSetBits(wifi_event_group, SWITCH_TO_STA_BIT);
+        } else {
+            xEventGroupSetBits(wifi_event_group, SWITCH_TO_CAPTIVE_AP_BIT);
+        }
+    } else if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
         if (need_reconnect) {
             xEventGroupSetBits(wifi_event_group, RECONECT_BIT);
         }
         if (need_mdns_update) {
             xEventGroupSetBits(wifi_event_group, mDNS_CHANGE_BIT);
         }
-        
-        // Redirect back to captive portal, method GET
-        httpd_resp_set_status(req, "302 Temporary Redirect");
-        httpd_resp_set_hdr(req, "Location", "/captive");
-        httpd_resp_send(req, "Redirected", HTTPD_RESP_USE_STRLEN);
-        ESP_LOGV(TAG_CAPTIVE, "Redirecting to back captive portal, method GET");
-        return ESP_OK;
-    } else {
-        ESP_LOGI(TAG_CAPTIVE, "Switching to STA mode with new config");
-        xEventGroupSetBits(wifi_event_group, SWITCH_TO_STA_BIT);
-        return ESP_OK;
     }
+    
+    // Redirect back to captive portal, method GET
+    httpd_resp_set_status(req, "302 Temporary Redirect");
+    httpd_resp_set_hdr(req, "Location", "/captive");
+    httpd_resp_send(req, "Redirected", HTTPD_RESP_USE_STRLEN);
+    ESP_LOGV(TAG_CAPTIVE, "Redirecting to back captive portal, method GET");
+    return ESP_OK;
 }
 
 
