@@ -28,9 +28,8 @@
       <div class="section">
         <label for="wifi_mode">Wi-Fi Mode:</label>
         <select id="wifi_mode" name="wifi_mode" required onchange="toggleMode(this.value)">
-          <option value="sta" selected>Station (Connect to Wi-Fi)</option>
-          <option value="ap">Access Point (Create Wi-Fi)</option>
-          <option value="apsta">AP+Station (Both)</option>
+          <option value=1 selected>Station (Connect to Wi-Fi)</option>
+          <option value=2>Access Point (Create Wi-Fi)</option>
         </select>
       </div>
       <div class="section" id="sta_fields">
@@ -80,13 +79,12 @@
     let loadedSSID=''; // Track the originally loaded SSID
     function toggle(id,show){g(id).style.display=show?'block':'none'}
     function toggleMode(mode){
-      const showSta=mode==='sta'||mode==='apsta';
-      const showAp=mode==='ap'||mode==='apsta';
-      toggle('sta_fields',showSta);
-      toggle('ap_fields',showAp);
-      g('ssid').required=showSta;
-      g('ap_ssid').required=showAp;
-      console.log('toggleMode: mode='+mode+', sta='+showSta+', ap='+showAp);
+      mode = Number(mode);
+      toggle('sta_fields',mode===1);
+      toggle('ap_fields',mode===2);
+      g('ssid').required=mode===1;
+      g('ap_ssid').required=mode===2;
+      console.log('toggleMode: mode='+mode);
     }
     function updateAuthmode(sel){
       const pwd=g('password'),pwdfld=g('password_field'),ent=g('enterpriseWarn'),btn=g('saveBtn'),auth=g('authmode');
@@ -191,7 +189,7 @@
         .then(c=>{
           console.log('loadSettings: loaded config - ssid='+c.ssid+', authmode='+c.authmode+', static_ip='+c.use_static_ip+', mDNS='+c.use_mDNS);
           loadedSSID=c.ssid||''; // Store the loaded SSID
-          if(c.wifi_mode){g('wifi_mode').value=c.wifi_mode;toggleMode(c.wifi_mode)}
+          if(c.wifi_mode){g('wifi_mode').value=Number(c.wifi_mode);toggleMode(Number(c.wifi_mode))}
           getSSIDs(c.ssid||'',c.authmode!==undefined?c.authmode:-1);
           if(c.password){g('password').value='';g('password').placeholder='(unchanged)'}
           g('ap_ssid').value=c.ap_ssid||'';

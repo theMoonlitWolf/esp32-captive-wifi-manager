@@ -47,9 +47,10 @@ static EventGroupHandle_t wifi_event_group;
 // Event bits for various WiFi states and actions
 static const int CONNECTED_BIT = BIT0;
 static const int SWITCH_TO_STA_BIT = BIT1;
-static const int SWITCH_TO_CAPTIVE_AP_BIT = BIT2;
-static const int RECONECT_BIT = BIT3;
-static const int mDNS_CHANGE_BIT = BIT4;
+static const int SWITCH_TO_AP_BIT = BIT2;
+static const int SWITCH_TO_CAPTIVE_AP_BIT = BIT3;
+static const int RECONECT_BIT = BIT4;
+static const int mDNS_CHANGE_BIT = BIT5;
 
 // HTTP server handle and configuration
 httpd_handle_t server = NULL;
@@ -976,12 +977,8 @@ esp_err_t scan_json_handler(httpd_req_t *req) {
  */
 esp_err_t captive_json_handler(httpd_req_t *req) {
     char json[512];
-    const char *mode_str = "sta";
-    if (captive_cfg.wifi_mode == WIFI_MODE_AP) mode_str = "ap";
-    else if (captive_cfg.wifi_mode == WIFI_MODE_APSTA) mode_str = "apsta";
-    
     snprintf(json, sizeof(json),
-        "{\"ssid\": \"%s\", \"authmode\": %d, \"password\": \"%s\", \"use_static_ip\": %s, \"static_ip\": \"%s\", \"use_mDNS\": %s, \"mDNS_hostname\": \"%s\", \"service_name\": \"%s\", \"wifi_mode\": \"%s\", \"ap_ssid\": \"%s\", \"ap_password\": \"%s\"}",
+        "{\"ssid\": \"%s\", \"authmode\": %d, \"password\": \"%s\", \"use_static_ip\": %s, \"static_ip\": \"%s\", \"use_mDNS\": %s, \"mDNS_hostname\": \"%s\", \"service_name\": \"%s\", \"wifi_mode\": %d, \"ap_ssid\": \"%s\", \"ap_password\": \"%s\"}",
         captive_cfg.ssid,
         captive_cfg.authmode,
         captive_cfg.password,
@@ -990,7 +987,7 @@ esp_err_t captive_json_handler(httpd_req_t *req) {
         captive_cfg.use_mDNS ? "true" : "false",
         captive_cfg.mDNS_hostname,
         captive_cfg.service_name,
-        mode_str,
+        captive_cfg.wifi_mode,
         captive_cfg.ap_ssid,
         captive_cfg.ap_password
     );
@@ -1024,12 +1021,8 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
         if (httpd_query_key_value(buf, "wifi_mode", param, sizeof(param)) == ESP_OK) {
             url_decode(param);
             ESP_LOGD(TAG_CAPTIVE, "Parsed WiFi Mode: %s", param);
-            wifi_mode_t new_mode = WIFI_MODE_STA;
-            if (strcmp(param, "ap") == 0) {
-                new_mode = WIFI_MODE_AP;
-            } else if (strcmp(param, "apsta") == 0) {
-                new_mode = WIFI_MODE_APSTA;
-            }
+            int mode_val = atoi(param);
+            wifi_mode_t new_mode = (mode_val == WIFI_MODE_AP) ? WIFI_MODE_AP : WIFI_MODE_STA;
             if (captive_cfg.wifi_mode != new_mode) {
                 mode_changed = true;
                 captive_cfg.wifi_mode = new_mode;
@@ -1042,7 +1035,7 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
             ESP_LOGD(TAG_CAPTIVE, "Parsed AP SSID: %s", param);
             if (strcmp(captive_cfg.ap_ssid, param) != 0) {
                 strcpy(captive_cfg.ap_ssid, param);
-                if (captive_cfg.wifi_mode == WIFI_MODE_AP || captive_cfg.wifi_mode == WIFI_MODE_APSTA) {
+                if (captive_cfg.wifi_mode == WIFI_MODE_AP) {
                     mode_changed = true;
                 }
             }
@@ -1054,7 +1047,7 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
             // Only update if not empty (empty = unchanged)
             if (strlen(param) > 0 && strcmp(captive_cfg.ap_password, param) != 0) {
                 strcpy(captive_cfg.ap_password, param);
-                if (captive_cfg.wifi_mode == WIFI_MODE_AP || captive_cfg.wifi_mode == WIFI_MODE_APSTA) {
+                if (captive_cfg.wifi_mode == WIFI_MODE_AP) {
                     mode_changed = true;
                 }
             }
@@ -1225,9 +1218,9 @@ esp_err_t captive_post_handler(httpd_req_t *req) {
         if (captive_cfg.wifi_mode == WIFI_MODE_STA) {
             xEventGroupSetBits(wifi_event_group, SWITCH_TO_STA_BIT);
         } else {
-            xEventGroupSetBits(wifi_event_group, SWITCH_TO_CAPTIVE_AP_BIT);
+            xEventGroupSetBits(wifi_event_group, SWITCH_TO_AP_BIT);
         }
-    } else if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+    } else if (mode == WIFI_MODE_STA) {
         if (need_reconnect) {
             xEventGroupSetBits(wifi_event_group, RECONECT_BIT);
         }
