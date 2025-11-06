@@ -59,6 +59,7 @@
   </form>
   <script>
     const g=id=>document.getElementById(id);
+    let loadedSSID=''; // Track the originally loaded SSID
     function toggle(id,show){g(id).style.display=show?'block':'none'}
     function updateAuthmode(sel){
       const pwd=g('password'),pwdfld=g('password_field'),ent=g('enterpriseWarn'),btn=g('saveBtn'),auth=g('authmode');
@@ -70,6 +71,19 @@
       }
       const mode=+sel.options[sel.selectedIndex].getAttribute('data-authmode');
       console.log('updateAuthmode: mode='+mode+', ssid='+sel.value);
+      
+      // Always clear password value first
+      pwd.value='';
+      pwd.placeholder='';
+      pwd.required=true;
+      
+      // If this is the saved SSID with a password, set placeholder and make it optional
+      if(sel.value===loadedSSID){
+        pwd.placeholder='(unchanged)';
+        pwd.required=false;
+        console.log('updateAuthmode: set placeholder for saved SSID');
+      }
+      
       if(mode===0){pwdfld.style.display='none';ent.style.display='none';auth.value=0;pwd.disabled=true;btn.disabled=false}
       else if(mode===2){pwdfld.style.display='none';ent.style.display='block';auth.value=2;pwd.disabled=true;btn.disabled=true}
       else{pwdfld.style.display='block';ent.style.display='none';auth.value=1;pwd.disabled=false;btn.disabled=false}
@@ -149,6 +163,7 @@
         .then(r=>r.json())
         .then(c=>{
           console.log('loadSettings: loaded config - ssid='+c.ssid+', authmode='+c.authmode+', static_ip='+c.use_static_ip+', mDNS='+c.use_mDNS);
+          loadedSSID=c.ssid||''; // Store the loaded SSID
           getSSIDs(c.ssid||'',c.authmode||'');
           if(c.password){g('password').value='';g('password').placeholder='(unchanged)'}
           g('use_static_ip').checked=!!c.use_static_ip;
