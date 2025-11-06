@@ -164,7 +164,7 @@
         .then(c=>{
           console.log('loadSettings: loaded config - ssid='+c.ssid+', authmode='+c.authmode+', static_ip='+c.use_static_ip+', mDNS='+c.use_mDNS);
           loadedSSID=c.ssid||''; // Store the loaded SSID
-          getSSIDs(c.ssid||'',c.authmode||'');
+          getSSIDs(c.ssid||'',c.authmode!==undefined?c.authmode:-1);
           if(c.password){g('password').value='';g('password').placeholder='(unchanged)'}
           g('use_static_ip').checked=!!c.use_static_ip;
           g('static_ip').value=c.static_ip||'';
@@ -179,7 +179,7 @@
           g('dataWarn').style.display='block';
           g('password').disabled=true;
           g('saveBtn').disabled=true;
-          getSSIDs('','');
+          getSSIDs('',-1);
         });
     }
     g('refreshBtn').onclick=()=>{console.log('Refresh button clicked');loadSettings()};
