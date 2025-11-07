@@ -166,6 +166,7 @@ const blink_step_t *led_blink_list[BLINK_MAX] = {
 esp_err_t mount_sd_card();
 void wifi_init_captive();
 void wifi_init_sta();
+void wifi_init_ap();
 
 // NVS helper functions
 void get_nvs_wifi_settings(captive_portal_config *cfg);
@@ -281,7 +282,6 @@ esp_err_t wifi_init() {
 
     // Initialize captive config
     fill_captive_portal_config_struct(&captive_cfg);
-    strcpy(captive_cfg.ap_ssid, "ESP32-Captive-Portal");
 
     // Initialize NVS
     ESP_LOGI(TAG, "Initializing NVS...");
@@ -295,14 +295,19 @@ esp_err_t wifi_init() {
     // Read NVS settings
     get_nvs_wifi_settings(&captive_cfg);
     ESP_LOGI(TAG, "STA SSID: %s, password: %s", captive_cfg.ssid, captive_cfg.password);
-    if (captive_cfg.ssid[0] == 0) {
-        ESP_LOGI(TAG, "No STA SSID not configured, launching captive portal AP mode...");
+    ESP_LOGI(TAG, "AP SSID: %s, password: %s", captive_cfg.ap_ssid, captive_cfg.ap_password);
+
+    // Decide startup mode based on saved wifi_mode and STA config
+    if (captive_cfg.wifi_mode == WIFI_MODE_AP) {
+        ESP_LOGI(TAG, "Configured for AP mode, switching to AP...");
+        xEventGroupSetBits(wifi_event_group, SWITCH_TO_AP_BIT);
+    } else if (captive_cfg.ssid[0] == 0) {
+        ESP_LOGI(TAG, "No STA SSID configured, launching captive portal AP mode...");
         xEventGroupSetBits(wifi_event_group, SWITCH_TO_CAPTIVE_AP_BIT);
     } else {
         ESP_LOGI(TAG, "STA SSID configured, switching to STA mode...");
         xEventGroupSetBits(wifi_event_group, SWITCH_TO_STA_BIT);
     }
-    ESP_LOGI(TAG, "AP SSID: %s, password: %s", captive_cfg.ap_ssid, captive_cfg.ap_password);
 
     // Start WiFi mode switch task
     xTaskCreate(wifi_event_group_listener_task, "wifi_event_group_listener_task", 4096, NULL, 4, NULL);
@@ -376,9 +381,8 @@ void wifi_init_captive() {
     ESP_LOGI(TAG_CAPTIVE, "Starting AP mode for captive portal...");
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    wifi_config_t wifi_cfg = ap_wifi_config(&captive_cfg);
+    wifi_config_t wifi_cfg = captive_ap_wifi_config(&captive_cfg);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg));
-    wifi_cfg = sta_wifi_config(&captive_cfg);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     
@@ -395,10 +399,10 @@ void wifi_init_captive() {
     inet_ntoa_r(ip_info.ip.addr, ip_addr, 16);
     ESP_LOGI(TAG_CAPTIVE, "Set up softAP with IP: %s", ip_addr);
 
-    if (captive_cfg.ap_password[0] != 0) {
-        ESP_LOGI(TAG_CAPTIVE, "SoftAP started: SSID:' %s' Password: '%s'", captive_cfg.ap_ssid, captive_cfg.ap_password);
+    if (wifi_cfg.ap.authmode != WIFI_AUTH_OPEN) {
+        ESP_LOGI(TAG_CAPTIVE, "SoftAP started: SSID:' %s' Password: '%s'", wifi_cfg.ap.ssid, wifi_cfg.ap.password);
     } else {
-        ESP_LOGI(TAG_CAPTIVE, "SoftAP started: SSID:' %s' No password", captive_cfg.ap_ssid);
+        ESP_LOGI(TAG_CAPTIVE, "SoftAP started: SSID:' %s' No password", wifi_cfg.ap.ssid);
     }
 
     // Start HTTP server and register handlers
@@ -509,6 +513,101 @@ void wifi_init_sta() {
     }
 }
 
+/**
+ * @brief Initialize WiFi in AP mode.
+ *
+ * This is a stub and will be implemented later.
+ */
+void wifi_init_ap() {
+    ESP_LOGI(TAG, "Starting WiFi in access point mode...");
+
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    wifi_config_t wifi_cfg = ap_wifi_config(&captive_cfg);
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    
+    // Set static IP if requested
+    
+    esp_netif_ip_info_t ip_info = {0};
+    esp_netif_dhcpc_stop(ap_netif);
+    if (captive_cfg.use_static_ip) {
+        uint32_t new_ip = ntohl(captive_cfg.static_ip.addr);
+        ip_info.ip.addr = captive_cfg.static_ip.addr;
+        ip_info.gw.addr = htonl((new_ip & 0xFFFFFF00)|0x01);    // x.x.x.1
+        ip_info.netmask.addr = htonl((255 << 24) | (255 << 16) | (255 << 8) | 0);   // 255.255.255.0
+        esp_netif_set_ip_info(ap_netif, &ip_info);
+    } else {
+        esp_netif_set_ip_info(ap_netif, &ip_info);
+        esp_netif_dhcpc_start(ap_netif);
+    }
+    
+    // Log IP address
+    esp_netif_get_ip_info(ap_netif, &ip_info);
+    char ip_addr[16];
+    inet_ntoa_r(ip_info.ip.addr, ip_addr, 16);
+    ESP_LOGD(TAG, "Set up AP with IP: %s", ip_addr);
+
+    ESP_LOGD(TAG, "Starting web server on port: %d", httpd_config.server_port);
+    ESP_ERROR_CHECK(httpd_start(&server, &httpd_config));
+
+    httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, not_found_handler);
+
+    // Register captive portal HTTP handlers (on /captive_portal for STA mode)
+    register_captive_portal_handlers();
+
+    httpd_uri_t index_html_uri = {
+        .uri = "/index.html",
+        .method = HTTP_GET,
+        .handler = index_html_get_handler
+    };
+    httpd_register_uri_handler(server, &index_html_uri);
+
+    httpd_uri_t wifi_status_json_uri = {
+        .uri = "/wifi-status.json",
+        .method = HTTP_GET,
+        .handler = wifi_status_json_handler,
+    };
+    httpd_register_uri_handler(server, &wifi_status_json_uri);
+
+    httpd_uri_t restart_uri = {
+        .uri = "/restart",
+        .method = HTTP_GET,
+        .handler = restart_handler
+    };
+    httpd_register_uri_handler(server, &restart_uri);
+
+    if (SD_card_present) {
+        // Register custom handlers
+        register_custom_http_handlers();
+
+        httpd_uri_t sd_file_uri = {
+            .uri = "/*",
+            .method = HTTP_GET,
+            .handler = sd_file_handler
+        };
+        httpd_register_uri_handler(server, &sd_file_uri);
+    } else {
+        httpd_uri_t no_sd_card_uri = {
+            .uri = "/*",
+            .method = HTTP_GET,
+            .handler = no_sd_card_handler
+        };
+        httpd_register_uri_handler(server, &no_sd_card_uri);
+    }
+
+
+    // Start mDNS if enabled
+    if (captive_cfg.use_mDNS) {
+        ESP_ERROR_CHECK(mdns_init());
+        ESP_ERROR_CHECK(mdns_hostname_set(captive_cfg.mDNS_hostname));
+        ESP_ERROR_CHECK(mdns_instance_name_set(captive_cfg.service_name));
+        ESP_LOGI(TAG, "mDNS started: http://%s.local", captive_cfg.mDNS_hostname);
+        ESP_LOGI(TAG, "mDNS service started: %s", captive_cfg.service_name);
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    }
+}
+
 void register_captive_portal_handlers(void) {
     if (server == NULL) return;
 
@@ -552,15 +651,27 @@ esp_err_t wifi_register_http_handler(httpd_uri_t *uri) {
     }
     custom_handlers[custom_handler_count] = *uri;
     custom_handler_count++;
+
     // Register immediately if server is running and in STA mode
     if (server) {
         wifi_mode_t mode;
-        if (esp_wifi_get_mode(&mode) == ESP_OK && mode == WIFI_MODE_STA) {
+        esp_wifi_get_mode(&mode);
+        
+        bool is_captive_mode = false;
+        if (mode == WIFI_MODE_APSTA || mode == WIFI_MODE_AP) {
+            wifi_config_t ap_config;
+            esp_wifi_get_config(WIFI_IF_AP, &ap_config);
+            is_captive_mode = (strcmp((char*)ap_config.ap.ssid, "ESP32_Captive_Portal") == 0);
+        }
+        
+        if (!is_captive_mode) {
             esp_err_t err = httpd_register_uri_handler(server, uri);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to register custom handler for %s: %s", uri->uri, esp_err_to_name(err));
             }
             return err;
+        } else {
+            ESP_LOGD(TAG, "Custom handler %s stored, will register when switching to STA/AP mode", uri->uri);
         }
     }
     return ESP_OK;
@@ -733,10 +844,28 @@ wifi_config_t ap_wifi_config(captive_portal_config *cfg) {
     } else {
         wifi_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
     }
+    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
 
     ESP_LOGD(TAG, "AP config set: SSID: %s, password: %s, authmode: %d", wifi_cfg.ap.ssid, wifi_cfg.ap.password, wifi_cfg.ap.authmode);
     
 
+    return wifi_cfg;
+}
+
+wifi_config_t captive_ap_wifi_config(captive_portal_config *cfg) {
+    wifi_config_t wifi_cfg;
+    esp_wifi_get_config(WIFI_IF_AP, &wifi_cfg);
+
+    strcpy((char *)wifi_cfg.ap.ssid, "ESP32_Captive_Portal");
+    strcpy((char *)wifi_cfg.ap.password, "");
+    wifi_cfg.ap.ssid_len = strlen("ESP32_Captive_Portal");
+    wifi_cfg.ap.max_connection = 4;
+
+    wifi_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+
+    ESP_LOGD(TAG, "AP config set: SSID: %s, password: %s, authmode: %d", wifi_cfg.ap.ssid, wifi_cfg.ap.password, wifi_cfg.ap.authmode);
+    
     return wifi_cfg;
 }
 
@@ -780,7 +909,7 @@ void wifi_event_group_listener_task(void *pvParameter) {
         // Wait for any relevant event bit
         EventBits_t eventBits = xEventGroupWaitBits(
             wifi_event_group,
-            SWITCH_TO_STA_BIT | SWITCH_TO_CAPTIVE_AP_BIT | RECONECT_BIT | mDNS_CHANGE_BIT,
+            SWITCH_TO_STA_BIT | SWITCH_TO_AP_BIT | SWITCH_TO_CAPTIVE_AP_BIT | RECONECT_BIT | mDNS_CHANGE_BIT,
             pdFALSE, pdFALSE, portMAX_DELAY);
         ESP_LOGD(TAG, "Recieved event bits: %s%s%s%s%s%s%s%s%s%s",
             eventBits & BIT9 ? "1" : "0",
@@ -818,6 +947,22 @@ void wifi_event_group_listener_task(void *pvParameter) {
             mdns_free(); // Free mDNS if exists
             xEventGroupClearBits(wifi_event_group, SWITCH_TO_STA_BIT);
             wifi_init_sta();
+        }
+
+        // Switch to AP mode (no captive hijack)
+        if (eventBits & SWITCH_TO_AP_BIT) {
+            ESP_LOGI(TAG, "Switching to AP mode...");
+            led_indicator_stop(led_handle, BLINK_LOADING);
+            led_indicator_start(led_handle, BLINK_WIFI_AP_STARTING);
+            if (server) {
+                httpd_stop(server);
+                server = NULL;
+            }
+            esp_wifi_disconnect();
+            esp_wifi_stop();
+            mdns_free(); // Free mDNS if exists
+            wifi_init_ap();
+            xEventGroupClearBits(wifi_event_group, SWITCH_TO_AP_BIT);
         }
 
         // Switch to captive AP mode
