@@ -27,6 +27,8 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #pragma region Variables & Config
 
@@ -39,6 +41,11 @@ static const char *TAG_SD = "Wifi-SD_Card";  // Log tag for SD card
 // Handler registry
 static httpd_uri_t custom_handlers[CONFIG_WIFI_MAX_CUSTOM_HTTP_HANDLERS];
 static size_t custom_handler_count = 0;
+
+// IP tracking for captive portal redirect (one redirect per IP)
+#define MAX_REDIRECTED_IPS 10
+static uint32_t redirected_ips[MAX_REDIRECTED_IPS];
+static int redirected_count = 0;
 
 // Event group for WiFi state management
 static EventGroupHandle_t wifi_event_group;
@@ -1068,6 +1075,7 @@ esp_err_t captive_error_redirect(httpd_req_t *req, httpd_err_code_t error) {
  */
 esp_err_t scan_json_handler(httpd_req_t *req) {
     ESP_LOGD(TAG_CAPTIVE, "Scan request received, starting WiFi scan...");
+    return ESP_FAIL; // Disable scanning for now for testing
     char json[700];
     uint16_t ap_count = 0;
     wifi_scan_config_t scan_config = {
@@ -1420,6 +1428,19 @@ void url_decode(char *str) {
 
 #pragma region STA handlers
 
+static bool is_ip_redirected(uint32_t ip) {
+    for (int i = 0; i < redirected_count; i++) {
+        if (redirected_ips[i] == ip) return true;
+    }
+    return false;
+}
+
+static void mark_ip_redirected(uint32_t ip) {
+    if (redirected_count < MAX_REDIRECTED_IPS) {
+        redirected_ips[redirected_count++] = ip;
+    }
+}
+
 esp_err_t no_sd_card_handler(httpd_req_t *req) {
     httpd_resp_set_status(req, "503 Service Unavailable");
     httpd_resp_set_type(req, "text/html");
@@ -1488,7 +1509,7 @@ esp_err_t wifi_status_json_handler(httpd_req_t *req) {
 }
 
 esp_err_t sd_file_handler(httpd_req_t *req) {
-    // Handle captive portal detection URLs and redirect to the server
+    // Handle captive portal detection URLs
     if (!strcmp(req->uri, "/generate_204") ||
         !strcmp(req->uri, "/gen_204") ||
         !strcmp(req->uri, "/ncsi.txt") ||
@@ -1497,22 +1518,68 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
         !strcmp(req->uri, "/success.txt") ||
         !strcmp(req->uri, "/redirect")) {
         
-            // Redirect to your landing page
-        httpd_resp_set_status(req, "302 Temporary Redirect");
-        char location[64];
-        if (captive_cfg.use_mDNS) {
-            snprintf(location, sizeof(location), "http://%s.local/", captive_cfg.mDNS_hostname);
-            ESP_LOGD(TAG_CAPTIVE, "Redirecting from %s to mDNS: %s", req->uri, location);
+        ESP_LOGV(TAG, "Captive portal detection request: %s", req->uri);
+        
+        // Get client IP from httpd session
+        uint32_t client_ip = 0;
+        int sockfd = httpd_req_to_sockfd(req);
+        
+        if (sockfd >= 0) {
+            struct sockaddr_storage addr;
+            socklen_t addr_len = sizeof(addr);
+            
+            if (getpeername(sockfd, (struct sockaddr *)&addr, &addr_len) == 0) {
+                if (addr.ss_family == AF_INET) {
+                    // IPv4
+                    struct sockaddr_in *addr_in = (struct sockaddr_in *)&addr;
+                    client_ip = addr_in->sin_addr.s_addr;
+                    char ip_str[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &(addr_in->sin_addr), ip_str, INET_ADDRSTRLEN);
+                    ESP_LOGV(TAG, "Client IPv4 obtained: %s (0x%08X)", ip_str, (unsigned int)client_ip);
+                } else if (addr.ss_family == AF_INET6) {
+                    // IPv6 - use hash of last 4 bytes as identifier
+                    struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&addr;
+                    memcpy(&client_ip, &addr_in6->sin6_addr.s6_addr[12], 4);
+                    char ip_str[INET6_ADDRSTRLEN];
+                    inet_ntop(AF_INET6, &(addr_in6->sin6_addr), ip_str, INET6_ADDRSTRLEN);
+                    ESP_LOGV(TAG, "Client IPv6 obtained: %s (hash: 0x%08X)", ip_str, (unsigned int)client_ip);
+                } else {
+                    ESP_LOGW(TAG, "Unknown address family: %d", addr.ss_family);
+                }
+            } else {
+                ESP_LOGW(TAG, "getpeername failed: errno=%d (%s)", errno, strerror(errno));
+            }
         } else {
-            esp_netif_ip_info_t ip_info;
-            esp_netif_get_ip_info(ap_netif, &ip_info);
-            char ip_addr[16];
-            inet_ntoa_r(ip_info.ip.addr, ip_addr, 16);
-            snprintf(location, sizeof(location), "http://%s/", ip_addr);
-            ESP_LOGD(TAG_CAPTIVE, "Redirecting from %s to IP: %s", req->uri, location);
+            ESP_LOGW(TAG, "Invalid socket fd: %d", sockfd);
         }
-        httpd_resp_set_hdr(req, "Location", location);
-        httpd_resp_send(req, "Redirected to server", HTTPD_RESP_USE_STRLEN);
+        
+        // First request from this IP: redirect to open popup
+        if (client_ip != 0 && !is_ip_redirected(client_ip)) {
+            mark_ip_redirected(client_ip);
+            
+            char location[64];
+            if (captive_cfg.use_mDNS) {
+                snprintf(location, sizeof(location), "http://%s.local/", captive_cfg.mDNS_hostname);
+            } else {
+                esp_netif_ip_info_t ip_info;
+                esp_netif_get_ip_info(ap_netif, &ip_info);
+                char ip_addr[16];
+                inet_ntoa_r(ip_info.ip.addr, ip_addr, 16);
+                snprintf(location, sizeof(location), "http://%s/", ip_addr);
+            }
+            
+            httpd_resp_set_status(req, "302 Found");
+            httpd_resp_set_hdr(req, "Location", location);
+            httpd_resp_send(req, NULL, 0);
+            ESP_LOGI(TAG, "First captive detection, redirecting to %s", location);
+            return ESP_OK;
+        } else if (client_ip == 0) {
+            ESP_LOGW(TAG, "Could not determine client IP, returning 204");
+        }
+        
+        // Subsequent requests or failed IP detection: silently return 204
+        httpd_resp_set_status(req, "204 No Content");
+        httpd_resp_send(req, NULL, 0);
         return ESP_OK;
     }
 
