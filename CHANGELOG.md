@@ -92,9 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Technical Details
 - Minimum ESP-IDF version: 5.5.0
 - Dependencies:
-  - espressif/mdns: ^1.8.2
-  - espressif/led_indicator: ^1.1.1
-  - 
+  - `espressif/mdns`: ^1.8.2
+  - `espressif/led_indicator`: ^1.1.1
+  - `dns_server`, not available on the component registry
 - Component registration with proper dependencies
 - Build system integration with CMakeLists.txt
 
