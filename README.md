@@ -67,6 +67,34 @@ Navigate to: **WiFi Component Configuration**
 - **Use SK6812 LED for status indication**: Enable/disable LED status indicator (default: enabled)
 - **GPIO pin for SK6812 status LED**: GPIO pin for the status LED (default: 45)
 
+### LED Status Indicators
+
+The component uses an SK6812 RGB LED to provide visual feedback about the device's current state. The LED patterns are as follows:
+
+| State | Color | Pattern | Description |
+|-------|-------|---------|-------------|
+| **Off** | None | Solid off | LED is disabled or device is powered off |
+| **Loading** | White | Slow breathing (500ms) | System is initializing, loading configuration |
+| **Loaded** | White | 2 quick blinks | System initialization complete |
+| **WiFi Connecting** | Yellow/Orange | Slow breathing (500ms) | Attempting to connect to saved WiFi network |
+| **WiFi Connected** | Yellow/Orange | 2 quick blinks | Successfully connected to WiFi network (STA mode) |
+| **WiFi Disconnected** | Red | 3 quick blinks | Disconnected from WiFi network, will attempt reconnection |
+| **AP Starting** | Blue | Slow breathing (500ms) | Captive portal AP is starting up |
+| **AP Started** | Blue | 2 quick blinks | Captive portal AP is active and ready for configuration |
+
+**Pattern Details:**
+- **Breathing**: LED smoothly fades in and out (pulsing effect)
+- **Quick blinks**: 100ms on/off cycles
+- **Slow breathing**: 500ms fade in/out cycles
+
+**Color Reference (HSV):**
+- White: Neutral system operations
+- Yellow/Orange (Hue 40°): Station (STA) mode operations
+- Red (Hue 0°): Error or disconnected state
+- Blue (Hue 210°): Access Point (AP) mode operations
+
+You can override the LED color at any time using `wifi_set_led_rgb()` for custom application-specific status indication.
+
 ## How to Use as a Developer
 
 ### Prerequisites
