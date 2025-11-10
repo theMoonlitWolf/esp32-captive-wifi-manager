@@ -176,6 +176,7 @@ void fill_captive_portal_config_struct(captive_portal_config *cfg);
 // WiFi configuration helpers
 wifi_config_t ap_wifi_config(captive_portal_config *cfg);
 wifi_config_t sta_wifi_config(captive_portal_config *cfg);
+wifi_config_t captive_ap_wifi_config(captive_portal_config *cfg);
 
 // FreeRTOS task functions
 void wifi_event_group_listener_task(void *pvParameter);
@@ -185,7 +186,7 @@ void register_custom_http_handlers(void);
 void register_captive_portal_handlers(void);
 
 // HTTP request handlers
-esp_err_t captive_redirect(httpd_req_t* req, httpd_err_code_t error);
+esp_err_t captive_error_redirect(httpd_req_t* req, httpd_err_code_t error);
 esp_err_t captive_handler(httpd_req_t* req);
 esp_err_t captive_post_handler(httpd_req_t* req);
 esp_err_t captive_json_handler(httpd_req_t* req);
@@ -383,7 +384,6 @@ void wifi_init_captive() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     wifi_config_t wifi_cfg = captive_ap_wifi_config(&captive_cfg);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     
     int8_t max_tx_power;
@@ -406,12 +406,12 @@ void wifi_init_captive() {
     }
 
     // Start HTTP server and register handlers
-    ESP_LOGV(TAG_CAPTIVE, "Starting web server on port: %d", httpd_config.server_port);
+    ESP_LOGD(TAG_CAPTIVE, "Starting web server on port: %d", httpd_config.server_port);
     ESP_ERROR_CHECK(httpd_start(&server, &httpd_config));
 
     register_captive_portal_handlers();
 
-    ESP_ERROR_CHECK(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, captive_redirect));
+    ESP_ERROR_CHECK(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, captive_error_redirect));
 
     // Start DNS server for captive portal redirection (highjack all DNS queries)
     dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*" /* all A queries */, "WIFI_AP_DEF" /* softAP netif ID */);
@@ -443,7 +443,6 @@ void wifi_init_sta() {
         ip_info.netmask.addr = htonl((255 << 24) | (255 << 16) | (255 << 8) | 0);   // 255.255.255.0
         esp_netif_set_ip_info(sta_netif, &ip_info);
     } else {
-        esp_netif_set_ip_info(sta_netif, &ip_info);
         esp_netif_dhcpc_start(sta_netif);
     }
     
@@ -524,26 +523,33 @@ void wifi_init_ap() {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     wifi_config_t wifi_cfg = ap_wifi_config(&captive_cfg);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_cfg));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
     
-    // Set static IP if requested
-    
+    int8_t max_tx_power;
+    ESP_ERROR_CHECK(esp_wifi_get_max_tx_power(&max_tx_power));
+    ESP_LOGI(TAG, "Max TX power is %d, setting to 44 (11dBm) for AP mode", max_tx_power);
+    ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(44)); // 44 = 11dBm (~5-10m range)
+
+        // Configure AP IP address
     esp_netif_ip_info_t ip_info = {0};
-    esp_netif_dhcpc_stop(ap_netif);
+    esp_netif_dhcps_stop(ap_netif);  // Stop DHCP SERVER
+    
     if (captive_cfg.use_static_ip) {
         uint32_t new_ip = ntohl(captive_cfg.static_ip.addr);
         ip_info.ip.addr = captive_cfg.static_ip.addr;
         ip_info.gw.addr = htonl((new_ip & 0xFFFFFF00)|0x01);    // x.x.x.1
         ip_info.netmask.addr = htonl((255 << 24) | (255 << 16) | (255 << 8) | 0);   // 255.255.255.0
-        esp_netif_set_ip_info(ap_netif, &ip_info);
     } else {
-        esp_netif_set_ip_info(ap_netif, &ip_info);
-        esp_netif_dhcpc_start(ap_netif);
+        // Default AP IP: 192.168.4.1
+        ip_info.ip.addr = htonl((192 << 24) | (168 << 16) | (4 << 8) | 1);
+        ip_info.gw.addr = ip_info.ip.addr;
+        ip_info.netmask.addr = htonl((255 << 24) | (255 << 16) | (255 << 8) | 0);
     }
     
+    ESP_ERROR_CHECK(esp_netif_set_ip_info(ap_netif, &ip_info));
+    ESP_ERROR_CHECK(esp_netif_dhcps_start(ap_netif));  // Start DHCP SERVER
+    
     // Log IP address
-    esp_netif_get_ip_info(ap_netif, &ip_info);
     char ip_addr[16];
     inet_ntoa_r(ip_info.ip.addr, ip_addr, 16);
     ESP_LOGD(TAG, "Set up AP with IP: %s", ip_addr);
@@ -551,7 +557,7 @@ void wifi_init_ap() {
     ESP_LOGD(TAG, "Starting web server on port: %d", httpd_config.server_port);
     ESP_ERROR_CHECK(httpd_start(&server, &httpd_config));
 
-    httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, not_found_handler);
+    ESP_ERROR_CHECK(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, not_found_handler));
 
     // Register captive portal HTTP handlers (on /captive_portal for STA mode)
     register_captive_portal_handlers();
@@ -606,6 +612,10 @@ void wifi_init_ap() {
         ESP_LOGI(TAG, "mDNS service started: %s", captive_cfg.service_name);
         mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
     }
+    
+    // Start DNS server for captive portal redirection (highjack all DNS queries)
+    dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*" /* all A queries */, "WIFI_AP_DEF" /* softAP netif ID */);
+    start_dns_server(&dns_config);
 }
 
 void register_captive_portal_handlers(void) {
@@ -814,8 +824,6 @@ wifi_config_t sta_wifi_config(captive_portal_config *cfg) {
         wifi_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
         ESP_LOGD(TAG, "STA config set: Authmode: 1, SSID: %s, password: %s", wifi_cfg.sta.ssid, wifi_cfg.sta.password);
     }
-    
-    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
 
     return wifi_cfg;
 }
@@ -844,7 +852,6 @@ wifi_config_t ap_wifi_config(captive_portal_config *cfg) {
     } else {
         wifi_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
     }
-    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
 
     ESP_LOGD(TAG, "AP config set: SSID: %s, password: %s, authmode: %d", wifi_cfg.ap.ssid, wifi_cfg.ap.password, wifi_cfg.ap.authmode);
     
@@ -862,7 +869,6 @@ wifi_config_t captive_ap_wifi_config(captive_portal_config *cfg) {
     wifi_cfg.ap.max_connection = 4;
 
     wifi_cfg.ap.authmode = WIFI_AUTH_OPEN;
-    wifi_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
 
     ESP_LOGD(TAG, "AP config set: SSID: %s, password: %s, authmode: %d", wifi_cfg.ap.ssid, wifi_cfg.ap.password, wifi_cfg.ap.authmode);
     
@@ -1049,8 +1055,9 @@ esp_err_t captive_handler(httpd_req_t *req) {
 /**
  * @brief HTTP error handler for redirecting to the captive portal.
  */
-esp_err_t captive_redirect(httpd_req_t *req, httpd_err_code_t error) {
+esp_err_t captive_error_redirect(httpd_req_t *req, httpd_err_code_t error) {
     httpd_resp_set_status(req, "302 Temporary Redirect");
+    ESP_LOGD(TAG_CAPTIVE, "Redirecting to captive portal URI: /captive");
     httpd_resp_set_hdr(req, "Location", "/captive");
     httpd_resp_send(req, "Redirected to captive portal", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
@@ -1481,6 +1488,33 @@ esp_err_t wifi_status_json_handler(httpd_req_t *req) {
 }
 
 esp_err_t sd_file_handler(httpd_req_t *req) {
+    // Handle captive portal detection URLs and redirect to the server
+    if (!strcmp(req->uri, "/generate_204") ||
+        !strcmp(req->uri, "/gen_204") ||
+        !strcmp(req->uri, "/ncsi.txt") ||
+        !strcmp(req->uri, "/connecttest.txt") ||
+        !strcmp(req->uri, "/hotspot-detect.html") ||
+        !strcmp(req->uri, "/success.txt") ||
+        !strcmp(req->uri, "/redirect")) {
+        
+            // Redirect to your landing page
+        httpd_resp_set_status(req, "302 Temporary Redirect");
+        char location[64];
+        if (captive_cfg.use_mDNS) {
+            snprintf(location, sizeof(location), "http://%s.local/", captive_cfg.mDNS_hostname);
+            ESP_LOGD(TAG_CAPTIVE, "Redirecting from %s to mDNS: %s", req->uri, location);
+        } else {
+            esp_netif_ip_info_t ip_info;
+            esp_netif_get_ip_info(ap_netif, &ip_info);
+            char ip_addr[16];
+            inet_ntoa_r(ip_info.ip.addr, ip_addr, 16);
+            snprintf(location, sizeof(location), "http://%s/", ip_addr);
+            ESP_LOGD(TAG_CAPTIVE, "Redirecting from %s to IP: %s", req->uri, location);
+        }
+        httpd_resp_set_hdr(req, "Location", location);
+        httpd_resp_send(req, "Redirected to server", HTTPD_RESP_USE_STRLEN);
+        return ESP_OK;
+    }
 
     char filepath[530];
     snprintf(filepath, sizeof(filepath), "%s%s", SD_CARD_MOUNT_POINT, req->uri);
