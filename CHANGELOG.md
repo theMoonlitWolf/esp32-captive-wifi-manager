@@ -126,14 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Future Roadmap
 
-- [ ] Additional authentication methods (WPA3)
+- [ ] Reusable LED indicator in the rest of the project
 - [ ] Multiple WiFi credential storage
 - [ ] Web-based OTA updates
-- [ ] REST API for programmatic configuration
 - [ ] Enhanced security features
 - [ ] Power management optimizations
-- [ ] Additional LED patterns and animations
-- [ ] Improved mobile responsiveness for captive portal
+- [ ] Additional authentication methods (WPA3)
 
 ---
 
