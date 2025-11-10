@@ -24,20 +24,37 @@
   <form method="POST" action="/captive">
     <div id="dataWarn" class="warning red">⚠️ Failed to load settings. Please check your connection.</div>
     <div class="section">
-      <label for="ssid">Wi-Fi SSID:</label>
-      <div class="ssid-row">
-        <select id="ssid" name="ssid" required style="flex:1" onchange="updateAuthmode(this)">
-          <option value="" disabled selected>Loading...</option>
+      <label>Wi-Fi Network Settings:</label>
+      <div class="section">
+        <label for="wifi_mode">Wi-Fi Mode:</label>
+        <select id="wifi_mode" name="wifi_mode" required onchange="toggleMode(this.value)">
+          <option value=1 selected>Station (Connect to Wi-Fi)</option>
+          <option value=2>Access Point (Create Wi-Fi)</option>
         </select>
-        <button type="button" id="refreshBtn" title="Refresh Wi-Fi list">⟳</button>
       </div>
-      <div id="scanWarn" class="warning red">⚠️ Wi-Fi scan failed. Please enter SSID manually if needed.</div>
-      <div id="enterpriseWarn" class="warning">⚠️ Enterprise networks are not supported. Please select a different network.</div>
-      <div id="password_field" style="display:block">
-        <label for="password">Wi-Fi Password:</label>
-        <input type="password" id="password" name="password">
+      <div class="section" id="sta_fields">
+        <label for="ssid">Wi-Fi SSID:</label>
+        <div class="ssid-row">
+          <select id="ssid" name="ssid" required style="flex:1" onchange="updateAuthmode(this)">
+            <option value="" disabled selected>Loading...</option>
+          </select>
+          <button type="button" id="refreshBtn" title="Refresh Wi-Fi list">⟳</button>
+        </div>
+        <div id="scanWarn" class="warning red">⚠️ Wi-Fi scan failed. Please enter SSID manually if needed.</div>
+        <div id="enterpriseWarn" class="warning">⚠️ Enterprise networks are not supported. Please select a different network.</div>
+        <div id="password_field" style="display:block">
+          <label for="password">Wi-Fi Password:</label>
+          <input type="password" id="password" name="password">
+        </div>
+        <input type="hidden" id="authmode" name="authmode" value="">
       </div>
-      <input type="hidden" id="authmode" name="authmode" value="">
+      <div class="section" id="ap_fields" style="display:none">
+        <label for="ap_ssid">AP SSID:</label>
+        <input type="text" id="ap_ssid" name="ap_ssid" placeholder="ESP32-AP">
+        <label for="ap_password">AP Password:</label>
+        <input type="password" id="ap_password" name="ap_password" placeholder="Leave empty for open network">
+        <small style="color:#666;font-size:0.85em">Min 8 characters or empty for open</small>
+      </div>
     </div>
     <div class="section">
       <label><input type="checkbox" id="use_static_ip" name="use_static_ip" value="true" onchange="toggle('static_ip_fields',this.checked)">Use Static IP</label>
@@ -61,6 +78,14 @@
     const g=id=>document.getElementById(id);
     let loadedSSID=''; // Track the originally loaded SSID
     function toggle(id,show){g(id).style.display=show?'block':'none'}
+    function toggleMode(mode){
+      mode = Number(mode);
+      toggle('sta_fields',mode===1);
+      toggle('ap_fields',mode===2);
+      g('ssid').required=mode===1;
+      g('ap_ssid').required=mode===2;
+      console.log('toggleMode: mode='+mode);
+    }
     function updateAuthmode(sel){
       const pwd=g('password'),pwdfld=g('password_field'),ent=g('enterpriseWarn'),btn=g('saveBtn'),auth=g('authmode');
       if(!sel||!sel.options||!sel.options[sel.selectedIndex]||!sel.options[sel.selectedIndex].getAttribute('data-authmode')){
@@ -164,8 +189,12 @@
         .then(c=>{
           console.log('loadSettings: loaded config - ssid='+c.ssid+', authmode='+c.authmode+', static_ip='+c.use_static_ip+', mDNS='+c.use_mDNS);
           loadedSSID=c.ssid||''; // Store the loaded SSID
+          if(c.wifi_mode){g('wifi_mode').value=Number(c.wifi_mode);toggleMode(Number(c.wifi_mode))}
           getSSIDs(c.ssid||'',c.authmode!==undefined?c.authmode:-1);
           if(c.password){g('password').value='';g('password').placeholder='(unchanged)'}
+          g('ap_ssid').value=c.ap_ssid||'';
+          g('ap_password').value='';
+          if(c.ap_password)g('ap_password').placeholder='(unchanged)';
           g('use_static_ip').checked=!!c.use_static_ip;
           g('static_ip').value=c.static_ip||'';
           toggle('static_ip_fields',c.use_static_ip);

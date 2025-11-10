@@ -19,9 +19,9 @@ typedef struct {
     bool use_mDNS;              ///< Enable mDNS if true
     char mDNS_hostname[32];     ///< mDNS hostname (e.g., "esp32")
     char service_name[64];      ///< mDNS service name (e.g., "ESP32 Web")
-
     char ap_ssid[32];           ///< SSID of the captive portal AP
     char ap_password[64];       ///< Password for the captive portal AP
+    wifi_mode_t wifi_mode;      ///< WiFi mode: WIFI_MODE_STA, WIFI_MODE_AP, or WIFI_MODE_APSTA
 } captive_portal_config;
 
 
