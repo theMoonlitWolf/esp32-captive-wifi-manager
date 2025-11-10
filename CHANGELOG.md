@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - v0.2.0
 
 ### Added
-- AP-only mode support for devices that don't need STA connection
+- AP-only mode support for devices that don't need STA connection or in cases where no other (WPA2/FREE) AP is available
 - Improved captive portal logic and user experience
 - Better error handling and recovery mechanisms
 
@@ -55,10 +55,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Captive portal for WiFi configuration
   - NVS-based credential persistence
   - WiFi scanning and network selection
-- Multiple authentication mode support:
-  - Open networks
-  - WPA2-Personal
-  - WPA2-Enterprise
 - Network features:
   - Static IP configuration
   - DHCP support
@@ -98,6 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependencies:
   - espressif/mdns: ^1.8.2
   - espressif/led_indicator: ^1.1.1
+  - 
 - Component registration with proper dependencies
 - Build system integration with CMakeLists.txt
 
