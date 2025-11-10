@@ -37,8 +37,7 @@ static const char *TAG_CAPTIVE = "Wifi-Captive_portal";  // Log tag for captive 
 static const char *TAG_SD = "Wifi-SD_Card";  // Log tag for SD card
 
 // Handler registry
-#define MAX_CUSTOM_HANDLERS 8
-static httpd_uri_t custom_handlers[MAX_CUSTOM_HANDLERS];
+static httpd_uri_t custom_handlers[CONFIG_WIFI_MAX_CUSTOM_HTTP_HANDLERS];
 static size_t custom_handler_count = 0;
 
 // Event group for WiFi state management
@@ -267,7 +266,7 @@ esp_err_t wifi_init() {
 
     // Configure HTTP server
     httpd_config.lru_purge_enable = true;
-    httpd_config.max_uri_handlers = 16;
+    httpd_config.max_uri_handlers = CONFIG_WIFI_MAX_CUSTOM_HTTP_HANDLERS + 8;
     httpd_config.uri_match_fn = httpd_uri_match_wildcard;
     
     // Set up default HTTP server configuration
@@ -594,6 +593,7 @@ void wifi_init_ap() {
         };
         httpd_register_uri_handler(server, &sd_file_uri);
     } else {
+        // will not work, need to run wildcard handler even if no SD card to have captive redirect in AP mode
         httpd_uri_t no_sd_card_uri = {
             .uri = "/*",
             .method = HTTP_GET,
@@ -655,7 +655,7 @@ esp_err_t wifi_register_http_handler(httpd_uri_t *uri) {
         ESP_LOGE(TAG, "Cannot register handler: uri or handler is NULL");
         return ESP_ERR_INVALID_ARG;
     }
-    if (custom_handler_count >= MAX_CUSTOM_HANDLERS) {
+    if (custom_handler_count >= CONFIG_WIFI_MAX_CUSTOM_HTTP_HANDLERS) {
         ESP_LOGE(TAG, "Custom handler registry full");
         return ESP_ERR_NO_MEM;
     }

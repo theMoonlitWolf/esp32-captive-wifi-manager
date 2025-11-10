@@ -43,6 +43,13 @@ config WIFI_SCAN_MAX_APS
     help
         Maximum number of Access Points to store from a WiFi scan. APs are sorted by signal strength (RSSI).
 
+config WIFI_MAX_CUSTOM_HTTP_HANDLERS
+    int "Maximum number of custom HTTP handlers"
+    default 8
+    help
+        Maximum number of custom HTTP handlers that can be registered in the WiFi component's HTTP server.
+        The total number of URI handlers is the sum of this value and the built-in handlers, which is 8.
+
 config PIN_WIFI_SD_MOSI
     int "SD card MOSI pin"
     default 11
