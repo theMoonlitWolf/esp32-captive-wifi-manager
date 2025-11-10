@@ -4,7 +4,7 @@ A comprehensive WiFi management component for ESP32 devices with captive portal 
 
 ## Overview
 
-The ESP32 Captive WiFi Manager provides an easy-to-use solution for managing WiFi connectivity on ESP32 devices. It automatically handles WiFi connection attempts, falls back to a captive portal when connection fails, and persists WiFi credentials to NVS (Non-Volatile Storage). This makes it ideal for IoT devices that need user-friendly WiFi configuration without requiring physical access or hardcoded credentials.
+The ESP32 Captive WiFi Manager provides an easy-to-use, yet complex solution for managing WiFi connectivity on ESP32 devices. It automatically handles WiFi connection attempts, falls back to a captive portal when connection fails, and persists WiFi credentials to NVS (Non-Volatile Storage). This makes it ideal for IoT devices that need user-friendly WiFi configuration without requiring physical access or hardcoded credentials.
 
 ## Use Cases
 
@@ -23,10 +23,10 @@ The ESP32 Captive WiFi Manager provides an easy-to-use solution for managing WiF
 - **WiFi Scanning**: Scans and displays available networks in the captive portal
 - **Credential Persistence**: Stores WiFi credentials in NVS flash memory
 - **AP-Only Mode**: Can operate solely as an Access Point without attempting STA connection
-- **Multiple Authentication Modes**: Supports Open, WPA2-Personal, and WPA2-Enterprise
+- **Multiple Authentication Modes**: Supports Open and WPA2-Personal
 - **Static IP Support**: Configure static IP addresses or use DHCP
 - **mDNS Support**: Optional mDNS hostname configuration for easy device discovery
-- **Status LED**: Visual feedback using SK6812 LED (configurable)
+- **Status LED**: Visual feedback on connection status using SK6812 LED (configurable)
 - **SD Card Support**: Optional SD card integration for file serving
 - **Custom HTTP Handlers**: Register your own HTTP endpoints alongside the captive portal
 
@@ -34,7 +34,7 @@ The ESP32 Captive WiFi Manager provides an easy-to-use solution for managing WiF
 
 1. **Station (STA) Mode**: Connects to an existing WiFi network
 2. **Access Point (AP) Mode**: Creates its own WiFi network with captive portal
-3. **Automatic Fallback**: Switches to AP mode after failed connection attempts
+3. **Captive portal**: Switches to AP captive portal mode after failed connection attempts
 
 ## Configuration Options
 
@@ -77,18 +77,6 @@ Navigate to: **WiFi Component Configuration**
 
 ### Installation
 
-#### Using ESP Component Manager (Recommended)
-
-1. Add the component to your project's `idf_component.yml`:
-
-```yaml
-dependencies:
-  esp32-captive-wifi-manager:
-    version: "^0.1.1"
-```
-
-2. The component will be automatically downloaded when you build your project.
-
 #### Manual Installation
 
 1. Clone or download this repository into your project's `components` directory:
@@ -96,6 +84,12 @@ dependencies:
 ```bash
 cd your_project/components
 git clone https://github.com/theMoonlitWolf/esp32-captive-wifi-manager.git
+```
+
+2. Add it to your `INCLUDE_DIRS` in `CMakeLists.txt`:
+
+```CMake
+INCLUDE_DIRS components/esp32-captive-wifi-manager/include
 ```
 
 ### Basic Usage
@@ -192,6 +186,8 @@ void app_main(void)
 }
 ```
 
+Note: This feature is depecated and Status led interface for other uses is to be wastly improved
+
 ## Exposed Interface (API)
 
 ### Main Functions
@@ -253,6 +249,7 @@ typedef struct {
     char ap_password[64];       // Captive portal AP password
 } captive_portal_config;
 ```
+Note: This is normally not used, only if you want hard coded values on first start.
 
 ## Available Examples
 
@@ -268,8 +265,11 @@ Located in `examples/full/`, this comprehensive example demonstrates:
 - LED color control
 - System status monitoring (uptime, heap memory)
 
-**Build and flash the example:**
+**Usage:**
 
+Connect an SD card with contents of the `webpage/` folder on its root.
+
+Build, flash, and monitor:
 ```bash
 cd examples/full
 idf.py build
@@ -297,10 +297,10 @@ When the device cannot connect to a saved WiFi network (or on first boot), it au
 
 ### Default Captive Portal Access
 
-- **SSID**: Configurable via NVS (defaults to device-specific name)
-- **Password**: Configurable via NVS (can be set to open)
-- **IP Address**: 192.168.4.1 (standard ESP32 AP default)
-- **URL**: Any URL will redirect to the configuration page (e.g., http://192.168.4.1)
+- **SSID**: `ESP32_Captive_Portal`, not password. *This is not configurable*
+  - If connected to the devide's AP, it should automatically launch the captive portal
+  - Any URL shoud redirect you there
+- **URI**: Navigate to `/captive` when connected to the device in runtime mode - STA or AP
 
 ## How It Works
 
@@ -311,12 +311,12 @@ When the device cannot connect to a saved WiFi network (or on first boot), it au
    - Mount SD card (if available)
 
 2. **Connection Attempt**:
-   - If saved credentials exist, attempt STA connection
+   - If saved credentials exist, attempt STA connection or launch AP if configured
    - Monitor connection success/failure
    - Count failed attempts
 
 3. **Fallback to AP Mode**:
-   - After max reconnection attempts, switch to AP mode
+   - After max reconnection attempts, switch to AP captive portal mode
    - Start DNS server for captive portal
    - Launch HTTP server with configuration interface
 
@@ -343,6 +343,9 @@ The component automatically manages these ESP-IDF component dependencies:
 - `mdns`: mDNS service discovery (v1.8.2+)
 - `led_indicator`: LED control (v1.1.1+)
 - `fatfs`: FAT filesystem (for SD card)
+
+The component also depends on this component, not available in ESP-IDF component registry:
+- `dns_server`: Used for DNS hijacking, by Espressif systems
 
 ## Troubleshooting
 
