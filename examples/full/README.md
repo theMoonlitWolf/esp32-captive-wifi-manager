@@ -108,8 +108,6 @@ This example can serve as a template for your own ESP32 web-based IoT applicatio
   
   Tested on:
   - ESP32-S3-DevKitC-1
-  - ESP32-DevKitC V4
-  - ESP32-WROOM-32
 
 - **microSD Card Module**: SPI-compatible SD card reader
   - Supported cards: microSD, microSDHC (up to 32GB recommended)
@@ -122,7 +120,7 @@ This example can serve as a template for your own ESP32 web-based IoT applicatio
 
 ### Optional Components
 
-- **SK6812 RGB LED**: For visual status indication
+- **SK6812 RGB LED**: For visual status indication, may be included on some dev boards
   - Default GPIO: 45 (configurable via menuconfig)
   - 5V compatible or with level shifter for 3.3V operation
 
@@ -179,7 +177,6 @@ The following components are automatically managed by ESP-IDF Component Manager:
 
 Recommended but optional:
 - **Visual Studio Code** with ESP-IDF extension
-- **PlatformIO** (alternative to ESP-IDF command line)
 - **Serial Terminal**: PuTTY, minicom, or ESP-IDF Monitor
 
 ## Getting Started
@@ -270,13 +267,13 @@ Recommended but optional:
 
 4. **Flash to ESP32**:
    ```bash
-   # Replace /dev/ttyUSB0 with your ESP32's serial port
-   idf.py -p /dev/ttyUSB0 flash
+   # Replace COMx with your ESP32's serial port
+   idf.py -p COMx flash
    ```
 
 5. **Monitor Serial Output**:
    ```bash
-   idf.py -p /dev/ttyUSB0 monitor
+   idf.py -p COMx monitor
    ```
    
    Press `Ctrl+]` to exit monitor.
@@ -607,8 +604,8 @@ Byte 0: Event ID (uint8)
 
 **Event IDs**:
 - `0x00`: EVENT_NONE (reserved)
-- `0x01`: EVENT_TIMEOUT (keep-alive signal)
-- `0x02`: EVENT_RELOAD (request current state)
+- `0x01`: EVENT_TIMEOUT
+- `0x02`: EVENT_RELOAD
 - `0x03`: EVENT_REVERT_SETTINGS (reset to defaults)
 
 **Client → Server Example** (JavaScript):
@@ -1029,113 +1026,6 @@ Follow similar pattern with `ws_event_type_t` enum.
 4. Test LED separately (ensure it's not damaged).
 5. Check wiring (DIN, VCC, GND).
 6. Verify LED type (SK6812 RGB, not WS2812B or others).
-
-## Advanced Topics
-
-### Serving Files from SPIFFS Instead of SD Card
-
-To embed web files in firmware (no SD card required):
-
-1. **Add SPIFFS Partition** to partition table.
-2. **Use SPIFFS Filesystem**: Replace SD card mount with SPIFFS mount in component code.
-3. **Create SPIFFS Image**: Use `spiffsgen.py` to create filesystem image from `webpage/` directory.
-4. **Flash SPIFFS**: `esptool.py write_flash <address> spiffs.bin`
-
-**Trade-offs**:
-- No SD card needed (simpler hardware)
-- Web files embedded in firmware (requires reflash to update)
-- Limited storage space (typically 1-3MB)
-
-### Implementing Server-Side State Broadcasting
-
-Broadcast state changes to all connected WebSocket clients:
-
-```c
-// Track connected clients (simplified example)
-static int active_sockets[10];
-static int socket_count = 0;
-
-// When a value changes, broadcast to all clients
-void broadcast_value(uint8_t type, int16_t value) {
-    for (int i = 0; i < socket_count; i++) {
-        uint8_t payload[3];
-        payload[0] = type;
-        payload[1] = (uint8_t)(value & 0xFF);
-        payload[2] = (uint8_t)((value >> 8) & 0xFF);
-        
-        httpd_ws_frame_t ws_frame = {
-            .type = HTTPD_WS_TYPE_BINARY,
-            .payload = payload,
-            .len = sizeof(payload)
-        };
-        
-        httpd_ws_send_frame_async(server_handle, active_sockets[i], &ws_frame);
-    }
-}
-```
-
-**Use Case**: Multiple users controlling the same device simultaneously with synchronized state.
-
-### Implementing Authentication
-
-Add basic HTTP authentication:
-
-```c
-esp_err_t authenticated_handler(httpd_req_t *req) {
-    // Check Authorization header
-    char auth_header[100];
-    if (httpd_req_get_hdr_value_str(req, "Authorization", auth_header, sizeof(auth_header)) != ESP_OK) {
-        // No auth header, request authentication
-        httpd_resp_set_status(req, "401 Unauthorized");
-        httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"ESP32\"");
-        return httpd_resp_send(req, "Unauthorized", HTTPD_RESP_USE_STRLEN);
-    }
-    
-    // Validate credentials (base64 decode auth_header and check)
-    // ...
-    
-    // Proceed with handler
-    return my_handler_logic(req);
-}
-```
-
-### Adding HTTPS/TLS Support
-
-For encrypted communication:
-
-1. **Generate Certificates**: Self-signed or from CA.
-2. **Enable HTTPS** in ESP-HTTP-Server configuration.
-3. **Embed Certificates**: Include in firmware.
-4. **Update Client**: Use `wss://` for WebSocket, `https://` for HTTP.
-
-**Note**: Increases firmware size and complexity. Consider for production deployments handling sensitive data.
-
-### Power Optimization
-
-For battery-powered applications:
-
-1. **WiFi Power Save**: Enable modem sleep mode.
-2. **Reduce Poll Frequency**: Increase status update intervals.
-3. **Deep Sleep**: Sleep between operations, wake on timer or GPIO.
-4. **Disable LED**: LED consumes significant power.
-5. **Lower Clock Speed**: Reduce CPU frequency when idle.
-
-### Integration with Cloud Services
-
-Send data to cloud platforms (AWS IoT, Azure IoT, MQTT brokers):
-
-```c
-// Example: Publish to MQTT on state change
-void publish_state() {
-    char payload[100];
-    snprintf(payload, sizeof(payload), 
-             "{\"binary\":%d,\"json\":%d}", 
-             sliderBinaryValue, sliderJSONValue);
-    mqtt_publish("esp32/status", payload);
-}
-```
-
-Include MQTT client component and configure broker settings.
 
 ---
 
