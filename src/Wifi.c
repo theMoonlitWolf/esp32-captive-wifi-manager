@@ -32,63 +32,107 @@
 
 #pragma region Variables & Config
 
+/** @brief NVS namespace used for storing WiFi credentials and settings */
 static const char *NVS_NAMESPACE_WIFI = "wifi_settings";
-static const char *SD_CARD_MOUNT_POINT = "/sdcard";
-static const char *TAG = "Wifi";  // Log tag for this module
-static const char *TAG_CAPTIVE = "Wifi-Captive_portal";  // Log tag for captive portal
-static const char *TAG_SD = "Wifi-SD_Card";  // Log tag for SD card
 
-// Handler registry
+/** @brief Mount point path for the SD card filesystem */
+static const char *SD_CARD_MOUNT_POINT = "/sdcard";
+
+/** @brief Log tag for general WiFi module messages */
+static const char *TAG = "Wifi";
+
+/** @brief Log tag for captive portal specific messages */
+static const char *TAG_CAPTIVE = "Wifi-Captive_portal";
+
+/** @brief Log tag for SD card related messages */
+static const char *TAG_SD = "Wifi-SD_Card";
+
+/** @brief Registry array for storing custom HTTP handlers registered by the application */
 static httpd_uri_t custom_handlers[CONFIG_WIFI_MAX_CUSTOM_HTTP_HANDLERS];
+
+/** @brief Count of currently registered custom HTTP handlers */
 static size_t custom_handler_count = 0;
 
-// IP tracking for captive portal redirect (one redirect per IP)
+/** @brief Maximum number of client IPs to track for captive portal redirect */
 #define MAX_REDIRECTED_IPS 10
+
+/** @brief Array tracking IPs that have already been redirected to prevent redirect loops */
 static uint32_t redirected_ips[MAX_REDIRECTED_IPS];
+
+/** @brief Number of IPs currently tracked in redirected_ips array */
 static int redirected_count = 0;
 
-// Event group for WiFi state management
+/** @brief FreeRTOS event group for WiFi state management and mode switching */
 static EventGroupHandle_t wifi_event_group;
 
-// Event bits for various WiFi states and actions
+/** @brief Event bit indicating WiFi is connected to an AP (STA mode) */
 static const int CONNECTED_BIT = BIT0;
+
+/** @brief Event bit to trigger switch to STA (station/client) mode */
 static const int SWITCH_TO_STA_BIT = BIT1;
+
+/** @brief Event bit to trigger switch to AP (access point) mode */
 static const int SWITCH_TO_AP_BIT = BIT2;
+
+/** @brief Event bit to trigger switch to captive portal AP mode */
 static const int SWITCH_TO_CAPTIVE_AP_BIT = BIT3;
+
+/** @brief Event bit to trigger reconnection in STA mode */
 static const int RECONECT_BIT = BIT4;
+
+/** @brief Event bit to trigger mDNS configuration update */
 static const int mDNS_CHANGE_BIT = BIT5;
 
-// HTTP server handle and configuration
+/** @brief HTTP server handle, NULL when server is not running */
 httpd_handle_t server = NULL;
+
+/** @brief Counter for consecutive STA connection failures */
 static int sta_fails_count = 0;
+
+/** @brief Flag indicating whether SD card is mounted and available */
 bool SD_card_present = false;
 
+/** @brief HTTP server configuration structure */
 static httpd_config_t httpd_config = HTTPD_DEFAULT_CONFIG();
+
+/** @brief Current captive portal and WiFi configuration */
 captive_portal_config captive_cfg = { 0 };
+
+/** @brief Network interface handles for AP and STA modes */
 esp_netif_t *ap_netif, *sta_netif;
 
 
 // HTML page binary symbols (linked at build time, defined in CMakeLists.txt)
+/** @brief Start address of embedded captive portal HTML page */
 extern const char captive_html_start[] asm("_binary_captive_html_start");
+
+/** @brief End address of embedded captive portal HTML page */
 extern const char captive_html_end[] asm("_binary_captive_html_end");
 
+/**
+ * @brief LED blink pattern enumeration.
+ * 
+ * Defines different LED patterns for various device states.
+ */
 enum {
-    BLINK_OFF = 0,
-    BLINK_LOADING,
-    BLINK_LOADED,
-    BLINK_WIFI_CONNECTING,
-    BLINK_WIFI_CONNECTED,
-    BLINK_WIFI_DISCONNECTED,
-    BLINK_WIFI_AP_STARTING,
-    BLINK_WIFI_AP_STARTED,
-    BLINK_MAX
+    BLINK_OFF = 0,              ///< LED off
+    BLINK_LOADING,              ///< System loading/initializing
+    BLINK_LOADED,               ///< System loaded successfully
+    BLINK_WIFI_CONNECTING,      ///< Attempting WiFi connection
+    BLINK_WIFI_CONNECTED,       ///< WiFi connected successfully
+    BLINK_WIFI_DISCONNECTED,    ///< WiFi disconnected/failed
+    BLINK_WIFI_AP_STARTING,     ///< AP mode starting
+    BLINK_WIFI_AP_STARTED,      ///< AP mode active
+    BLINK_MAX                   ///< Total number of blink patterns
 };
 
+/** @brief LED pattern for off state - solid off */
 static const blink_step_t off[] = {
     {LED_BLINK_HOLD, LED_STATE_OFF, 0},
     {LED_BLINK_STOP, 0, 0}
 };
 
+/** @brief LED pattern for loading state - white breathing animation */
 static const blink_step_t loading[] = {
     {LED_BLINK_HSV, SET_HSV(0, 0, 0), 0},
     {LED_BLINK_BREATHE, LED_STATE_75_PERCENT, 500},
@@ -96,6 +140,7 @@ static const blink_step_t loading[] = {
     {LED_BLINK_LOOP, 0, 0}
 };
 
+/** @brief LED pattern for loaded state - 2 quick white blinks */
 static const blink_step_t loaded[] = {
     {LED_BLINK_HSV, SET_HSV(0, 0, 0), 0},
     {LED_BLINK_HOLD, LED_STATE_OFF, 100},
@@ -106,6 +151,7 @@ static const blink_step_t loaded[] = {
     {LED_BLINK_STOP, 0, 0}
 };
 
+/** @brief LED pattern for WiFi connecting - yellow/orange breathing */
 static const blink_step_t wifi_connecting[] = {
     {LED_BLINK_HSV, SET_HSV(40, MAX_SATURATION, 0), 0},
     {LED_BLINK_BREATHE, LED_STATE_75_PERCENT, 500},
@@ -113,6 +159,7 @@ static const blink_step_t wifi_connecting[] = {
     {LED_BLINK_LOOP, 0, 0}
 };
 
+/** @brief LED pattern for WiFi connected - 2 quick yellow/orange blinks */
 static const blink_step_t wifi_connected[] = {
     {LED_BLINK_HSV, SET_HSV(40, MAX_SATURATION, 0), 0},
     {LED_BLINK_HOLD, LED_STATE_OFF, 100},
@@ -123,6 +170,7 @@ static const blink_step_t wifi_connected[] = {
     {LED_BLINK_STOP, 0, 0}
 };
 
+/** @brief LED pattern for WiFi disconnected - 3 quick red blinks */
 static const blink_step_t wifi_disconnected[] = {
     {LED_BLINK_HSV, SET_HSV(0, MAX_SATURATION, 0), 0},
     {LED_BLINK_HOLD, LED_STATE_OFF, 100},
@@ -135,6 +183,7 @@ static const blink_step_t wifi_disconnected[] = {
     {LED_BLINK_STOP, 0, 0}
 };
 
+/** @brief LED pattern for AP starting - blue breathing */
 static const blink_step_t wifi_ap_starting[] = {
     {LED_BLINK_HSV, SET_HSV(210, MAX_SATURATION, 0), 0},
     {LED_BLINK_BREATHE, LED_STATE_75_PERCENT, 500},
@@ -142,6 +191,7 @@ static const blink_step_t wifi_ap_starting[] = {
     {LED_BLINK_LOOP, 0, 0}
 };
 
+/** @brief LED pattern for AP started - 2 quick blue blinks */
 static const blink_step_t wifi_ap_started[] = {
     {LED_BLINK_HSV, SET_HSV(210, MAX_SATURATION, 0), 0},
     {LED_BLINK_HOLD, LED_STATE_OFF, 100},
@@ -152,7 +202,10 @@ static const blink_step_t wifi_ap_started[] = {
     {LED_BLINK_STOP, 0, 0}
 };
 
-led_indicator_handle_t led_handle; ///< Handle for the LED indicator
+/** @brief Handle for the LED indicator component */
+led_indicator_handle_t led_handle;
+
+/** @brief Array of LED blink patterns indexed by blink type enumeration */
 const blink_step_t *led_blink_list[BLINK_MAX] = {
     [BLINK_OFF] = off,
     [BLINK_LOADING] = loading,
@@ -169,44 +222,225 @@ const blink_step_t *led_blink_list[BLINK_MAX] = {
 #pragma region Functions
 
 // WiFi initialization functions
+
+/**
+ * @brief Mount the SD card using SPI interface.
+ * 
+ * Initializes the SPI bus and mounts the FAT filesystem from the SD card
+ * at the configured mount point. Lists files on the card at debug log level.
+ * 
+ * @return ESP_OK on success
+ * @return Error code if SPI initialization or mounting fails
+ */
 esp_err_t mount_sd_card();
+
+/**
+ * @brief Initialize WiFi in captive portal AP mode.
+ * 
+ * Configures the device as an access point with DNS hijacking for captive portal.
+ */
 void wifi_init_captive();
+
+/**
+ * @brief Initialize WiFi in station (client) mode.
+ * 
+ * Connects to a configured WiFi network and starts the HTTP server.
+ */
 void wifi_init_sta();
+
+/**
+ * @brief Initialize WiFi in access point mode.
+ * 
+ * Starts the device as an access point with the configured SSID and password.
+ */
 void wifi_init_ap();
 
 // NVS helper functions
+
+/**
+ * @brief Read WiFi settings from NVS flash memory.
+ * 
+ * @param cfg Pointer to configuration structure to populate with saved settings
+ */
 void get_nvs_wifi_settings(captive_portal_config *cfg);
+
+/**
+ * @brief Write WiFi settings to NVS flash memory.
+ * 
+ * Only writes changed values to minimize flash wear.
+ * 
+ * @param cfg Pointer to configuration structure containing settings to save
+ */
 void set_nvs_wifi_settings(captive_portal_config *cfg);
+
+/**
+ * @brief Initialize captive portal configuration structure with default empty values.
+ * 
+ * @param cfg Pointer to configuration structure to initialize
+ */
 void fill_captive_portal_config_struct(captive_portal_config *cfg);
 
 // WiFi configuration helpers
+
+/**
+ * @brief Create WiFi configuration for AP mode from captive portal config.
+ * 
+ * @param cfg Pointer to captive portal configuration
+ * @return WiFi configuration structure for AP mode
+ */
 wifi_config_t ap_wifi_config(captive_portal_config *cfg);
+
+/**
+ * @brief Create WiFi configuration for STA mode from captive portal config.
+ * 
+ * @param cfg Pointer to captive portal configuration
+ * @return WiFi configuration structure for STA mode
+ */
 wifi_config_t sta_wifi_config(captive_portal_config *cfg);
+
+/**
+ * @brief Create WiFi configuration for captive portal AP mode.
+ * 
+ * Uses hardcoded SSID "ESP32_Captive_Portal" with no password.
+ * 
+ * @param cfg Pointer to captive portal configuration (unused, for signature compatibility)
+ * @return WiFi configuration structure for captive AP mode
+ */
 wifi_config_t captive_ap_wifi_config(captive_portal_config *cfg);
 
 // FreeRTOS task functions
+
+/**
+ * @brief FreeRTOS task that listens for WiFi mode switch events.
+ * 
+ * Monitors event group bits and performs WiFi mode transitions,
+ * reconnections, and mDNS updates as requested.
+ * 
+ * @param pvParameter Unused task parameter
+ */
 void wifi_event_group_listener_task(void *pvParameter);
 
 // HTTP handler registration helpers
+
+/**
+ * @brief Register all custom HTTP handlers with the server.
+ * 
+ * Called when transitioning to STA or AP mode to activate custom handlers.
+ */
 void register_custom_http_handlers(void);
+
+/**
+ * @brief Register captive portal HTTP handlers with the server.
+ * 
+ * Registers handlers for /captive, /captive.json, and /scan.json endpoints.
+ */
 void register_captive_portal_handlers(void);
 
 // HTTP request handlers
+
+/**
+ * @brief HTTP error handler that redirects to captive portal page.
+ * 
+ * @param req HTTP request handle
+ * @param error Error code that triggered this handler
+ * @return ESP_OK on success
+ */
 esp_err_t captive_error_redirect(httpd_req_t* req, httpd_err_code_t error);
+
+/**
+ * @brief HTTP GET handler for captive portal page.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t captive_handler(httpd_req_t* req);
+
+/**
+ * @brief HTTP POST handler for captive portal configuration updates.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t captive_post_handler(httpd_req_t* req);
+
+/**
+ * @brief HTTP GET handler for captive portal configuration JSON.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t captive_json_handler(httpd_req_t* req);
+
+/**
+ * @brief HTTP GET handler for WiFi network scan results JSON.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t scan_json_handler(httpd_req_t* req);
 
+/**
+ * @brief HTTP 404 error handler.
+ * 
+ * @param req HTTP request handle
+ * @param error Error code
+ * @return ESP_FAIL to indicate error
+ */
 esp_err_t not_found_handler(httpd_req_t* req, httpd_err_code_t error);
 
+/**
+ * @brief HTTP GET handler for index.html (redirects to root).
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t index_html_get_handler(httpd_req_t* req);
+
+/**
+ * @brief HTTP GET handler for WiFi status JSON.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t wifi_status_json_handler(httpd_req_t* req);
+
+/**
+ * @brief HTTP GET handler for serving files from SD card.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success, error code on failure
+ */
 esp_err_t sd_file_handler(httpd_req_t* req);
+
+/**
+ * @brief HTTP GET handler for /restart endpoint (reboots device).
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t restart_handler(httpd_req_t *req);
+
+/**
+ * @brief HTTP GET handler when SD card is not present.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on success
+ */
 esp_err_t no_sd_card_handler(httpd_req_t *req);
 
 // WiFi event handler
+
+/**
+ * @brief Main WiFi and IP event handler callback.
+ * 
+ * Processes WiFi events (connect, disconnect, AP start, etc.) and
+ * IP events (got IP, lost IP) to manage system state.
+ * 
+ * @param arg User argument (unused)
+ * @param event_base Event base (WIFI_EVENT or IP_EVENT)
+ * @param event_id Specific event ID
+ * @param event_data Event-specific data
+ */
 void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 
 #pragma endregion
@@ -324,6 +558,15 @@ esp_err_t wifi_init() {
     return ESP_OK;
 }
 
+/**
+ * @brief Mount the SD card using SPI interface.
+ * 
+ * Initializes the SPI bus, configures the SD card interface, and mounts
+ * the FAT filesystem. Lists directory contents at debug log level if successful.
+ * 
+ * @return ESP_OK on successful mount
+ * @return Error code from SPI initialization or filesystem mount failure
+ */
 esp_err_t mount_sd_card() {
     ESP_LOGI(TAG_SD, "Mounting SD card...");
 
@@ -627,6 +870,17 @@ void wifi_init_ap() {
     start_dns_server(&dns_config);
 }
 
+/**
+ * @brief Register captive portal HTTP handlers with the web server.
+ * 
+ * Registers the following endpoints:
+ * - GET /captive - Main captive portal page
+ * - POST /captive - Configuration submission handler
+ * - GET /captive.json - Current configuration as JSON
+ * - GET /scan.json - WiFi network scan results
+ * 
+ * @note Only registers if server handle is not NULL
+ */
 void register_captive_portal_handlers(void) {
     if (server == NULL) return;
 
@@ -659,6 +913,19 @@ void register_captive_portal_handlers(void) {
     httpd_register_uri_handler(server, &scan_json_uri);
 }
 
+/**
+ * @brief Register a custom HTTP handler for use in STA/AP modes.
+ * 
+ * Stores the handler in a registry and registers it immediately if the server
+ * is running in STA or AP mode (not captive portal mode). Handlers are
+ * re-registered automatically when switching modes.
+ * 
+ * @param uri Pointer to httpd_uri_t structure defining the handler
+ * @return ESP_OK on success
+ * @return ESP_ERR_INVALID_ARG if uri or handler is NULL
+ * @return ESP_ERR_NO_MEM if maximum handlers exceeded
+ * @return Error code from httpd_register_uri_handler on registration failure
+ */
 esp_err_t wifi_register_http_handler(httpd_uri_t *uri) {
     if (uri == NULL || uri->uri == NULL || uri->handler == NULL) {
         ESP_LOGE(TAG, "Cannot register handler: uri or handler is NULL");
@@ -696,6 +963,14 @@ esp_err_t wifi_register_http_handler(httpd_uri_t *uri) {
     return ESP_OK;
 }
 
+/**
+ * @brief Register all stored custom HTTP handlers with the server.
+ * 
+ * Iterates through the custom handler registry and registers each handler
+ * with the HTTP server. Logs errors but continues on failure.
+ * 
+ * @note Only registers if server handle is not NULL
+ */
 void register_custom_http_handlers(void) {
     if (server == NULL) return;
     for (size_t i = 0; i < custom_handler_count; ++i) {
@@ -710,6 +985,14 @@ void register_custom_http_handlers(void) {
 
 #pragma region NVS helpers
 
+/**
+ * @brief Read WiFi configuration from NVS flash storage.
+ * 
+ * Opens the WiFi settings namespace and reads all saved configuration values
+ * into the provided structure. If values don't exist, they remain unchanged.
+ * 
+ * @param cfg Pointer to captive_portal_config structure to populate
+ */
 void get_nvs_wifi_settings(captive_portal_config *cfg) {
     ESP_LOGD(TAG, "Reading NVS WiFi settings...");
     if (cfg == NULL) {
@@ -744,6 +1027,14 @@ void get_nvs_wifi_settings(captive_portal_config *cfg) {
     }
 }
 
+/**
+ * @brief Write WiFi configuration to NVS flash storage.
+ * 
+ * Compares the provided configuration with currently saved values and only
+ * writes changed settings to minimize flash wear. Commits changes atomically.
+ * 
+ * @param cfg Pointer to captive_portal_config structure with values to save
+ */
 void set_nvs_wifi_settings(captive_portal_config *cfg) {
     ESP_LOGD(TAG, "Writing NVS WiFi settings...");
     int8_t n = 0;
@@ -868,6 +1159,15 @@ wifi_config_t ap_wifi_config(captive_portal_config *cfg) {
     return wifi_cfg;
 }
 
+/**
+ * @brief Create WiFi configuration for captive portal AP mode.
+ * 
+ * Configures an open access point with the hardcoded SSID "ESP32_Captive_Portal"
+ * and no password, suitable for captive portal operation.
+ * 
+ * @param cfg Pointer to captive portal configuration (unused, for signature compatibility)
+ * @return wifi_config_t WiFi configuration structure for captive AP
+ */
 wifi_config_t captive_ap_wifi_config(captive_portal_config *cfg) {
     wifi_config_t wifi_cfg;
     esp_wifi_get_config(WIFI_IF_AP, &wifi_cfg);
@@ -1429,6 +1729,12 @@ void url_decode(char *str) {
 
 #pragma region STA handlers
 
+/**
+ * @brief Check if a client IP has already been redirected to the captive portal.
+ * 
+ * @param ip Client IP address to check
+ * @return true if IP has been redirected previously, false otherwise
+ */
 static bool is_ip_redirected(uint32_t ip) {
     for (int i = 0; i < redirected_count; i++) {
         if (redirected_ips[i] == ip) return true;
@@ -1436,12 +1742,28 @@ static bool is_ip_redirected(uint32_t ip) {
     return false;
 }
 
+/**
+ * @brief Mark a client IP as having been redirected to the captive portal.
+ * 
+ * Adds the IP to the redirected IPs list to prevent redirect loops.
+ * 
+ * @param ip Client IP address to mark
+ */
 static void mark_ip_redirected(uint32_t ip) {
     if (redirected_count < MAX_REDIRECTED_IPS) {
         redirected_ips[redirected_count++] = ip;
     }
 }
 
+/**
+ * @brief HTTP handler for when SD card is not present.
+ * 
+ * Returns a 503 Service Unavailable status with a message prompting
+ * the user to insert an SD card and restart.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK always
+ */
 esp_err_t no_sd_card_handler(httpd_req_t *req) {
     httpd_resp_set_status(req, "503 Service Unavailable");
     httpd_resp_set_type(req, "text/html");
@@ -1449,6 +1771,14 @@ esp_err_t no_sd_card_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+/**
+ * @brief HTTP handler for /index.html endpoint.
+ * 
+ * Redirects requests to the root path (/) for consistency.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK always
+ */
 esp_err_t index_html_get_handler(httpd_req_t *req) {
     httpd_resp_set_status(req, "307 Temporary Redirect");
     httpd_resp_set_hdr(req, "Location", "/");
@@ -1509,8 +1839,27 @@ esp_err_t wifi_status_json_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+/**
+ * @brief HTTP handler for serving files from the SD card.
+ * 
+ * This handler serves files from the SD card mounted at /sdcard. It performs:
+ * - Captive portal detection URL handling (redirects first request, returns 204 for subsequent)
+ * - Directory index handling (serves index.html for directories)
+ * - File extension-based content type detection
+ * - Automatic .html extension appending for extensionless paths
+ * 
+ * Supported file types include HTML, CSS, JS, JSON, images, fonts, video, and more.
+ * 
+ * @param req HTTP request handle
+ * @return ESP_OK on successful file serving
+ * @return ESP_FAIL if file not found or cannot be opened
+ */
 esp_err_t sd_file_handler(httpd_req_t *req) {
-    // Handle captive portal detection URLs
+    // Handle captive portal detection URLs from various operating systems
+    // Android: /generate_204, /gen_204
+    // iOS: /hotspot-detect.html
+    // Windows: /ncsi.txt, /connecttest.txt
+    // Generic: /success.txt, /redirect, /204
     if (!strcmp(req->uri, "/generate_204") ||
         !strcmp(req->uri, "/gen_204") ||
         !strcmp(req->uri, "/ncsi.txt") ||
@@ -1523,7 +1872,7 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
         
         ESP_LOGV(TAG, "Captive portal detection request: %s", req->uri);
         
-        // Get client IP from httpd session
+        // Extract client IP address from socket for redirect tracking
         uint32_t client_ip = 0;
         int sockfd = httpd_req_to_sockfd(req);
         
@@ -1556,9 +1905,7 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
             ESP_LOGW(TAG, "Invalid socket fd: %d", sockfd);
         }
         
-        // Handle captive portal detection based on specific URLs
-        // Android uses /generate_204, iOS uses /hotspot-detect.html, Windows uses multiple
-        
+        // Determine response based on request type and redirect tracking
         // For Microsoft NCSI (Windows) - return the exact expected content
         if (!strcmp(req->uri, "/ncsi.txt") || !strcmp(req->uri, "/connecttest.txt")) {
             httpd_resp_set_type(req, "text/plain");
@@ -1566,7 +1913,8 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
             return ESP_OK;
         }
         
-        // First request from this IP: redirect to open popup, or if /redirect is explicitly requested
+        // First request from this IP: redirect to portal to open popup/browser
+        // Subsequent requests from same IP: return 204 to indicate internet connectivity
         if ((client_ip != 0 && !is_ip_redirected(client_ip))||!strcmp(req->uri, "/redirect")) {
             mark_ip_redirected(client_ip);
             
@@ -1594,9 +1942,11 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
         return ESP_OK;
     }
 
+    // Construct full filesystem path from URI
     char filepath[530];
     snprintf(filepath, sizeof(filepath), "%s%s", SD_CARD_MOUNT_POINT, req->uri);
 
+    // Handle directory requests by appending index.html
     struct stat st;
     if (stat(filepath, &st) == 0 && S_ISDIR(st.st_mode)) {
         size_t len = strlen(filepath);
@@ -1606,15 +1956,18 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
             strcat(filepath, "/index.html");
         }
     } else if (!strchr(req->uri, '.') && stat(filepath, &st) != 0) {
+        // If URI has no extension and file doesn't exist, try adding .html
         strcat(filepath, ".html");
     }
 
+    // Open and read the requested file
     FILE *f = fopen(filepath, "r");
     if (!f) {
         ESP_LOGE(TAG, "Failed to open file: %s (%s)", filepath, strerror(errno));
         return not_found_handler(req, HTTPD_404_NOT_FOUND);
     }
 
+    // Set appropriate Content-Type header based on file extension
     if (strstr(filepath, ".html") || strstr(filepath, ".htm")) {
         httpd_resp_set_type(req, "text/html");
     } else if (strstr(filepath, ".css")) {
@@ -1653,6 +2006,7 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
         httpd_resp_set_type(req, "application/octet-stream");
     }
 
+    // Stream file contents to client in chunks
     char buf[512];
     size_t read_bytes;
     while ((read_bytes = fread(buf, 1, sizeof(buf), f)) > 0) {
