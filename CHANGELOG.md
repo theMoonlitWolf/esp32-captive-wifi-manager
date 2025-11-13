@@ -5,7 +5,7 @@ All notable changes to the ESP32 Captive WiFi Manager project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - v0.2.0
+## [v0.2.0] - 2025-11-14
 
 ### Added
 
@@ -24,10 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored WiFi state machine for better reliability
 - Enhanced DNS server performance for captive portal
 - Optimized memory usage
-
-### In Progress
-
 - Documentation improvements
+
 
 ## [0.1.1] - 2025-11-01
 
