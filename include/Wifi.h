@@ -6,12 +6,18 @@
 #include "esp_http_server.h"
 #include "esp_netif.h"
 
+// Authentication mode constants
+#define WIFI_AUTHMODE_OPEN         0           ///< Open network (no authentication)
+#define WIFI_AUTHMODE_WPA_PSK      1           ///< WPA/WPA2-Personal (password-based)
+#define WIFI_AUTHMODE_ENTERPRISE   2           ///< WPA2/WPA3-Enterprise
+#define WIFI_AUTHMODE_INVALID      ((uint8_t)-1) ///< Invalid/unknown authentication mode
+
 /**
  * @brief Configuration structure for captive portal and WiFi settings.
  */
 typedef struct {
     char ssid[32];              ///< SSID of the WiFi network
-    uint8_t authmode;           ///< Authentication mode: 0=Open, 1=Password, 2=Enterprise
+    uint8_t authmode;           ///< Authentication mode: WIFI_AUTHMODE_OPEN, WIFI_AUTHMODE_WPA_PSK, or WIFI_AUTHMODE_ENTERPRISE
     char username[64];          ///< Username for WPA2-Enterprise (if applicable)
     char password[64];          ///< Password for the WiFi network
     bool use_static_ip;         ///< Use static IP if true, DHCP otherwise
@@ -19,9 +25,9 @@ typedef struct {
     bool use_mDNS;              ///< Enable mDNS if true
     char mDNS_hostname[32];     ///< mDNS hostname (e.g., "esp32")
     char service_name[64];      ///< mDNS service name (e.g., "ESP32 Web")
-
     char ap_ssid[32];           ///< SSID of the captive portal AP
     char ap_password[64];       ///< Password for the captive portal AP
+    wifi_mode_t wifi_mode;      ///< WiFi mode: WIFI_MODE_STA, WIFI_MODE_AP, or WIFI_MODE_APSTA
 } captive_portal_config;
 
 

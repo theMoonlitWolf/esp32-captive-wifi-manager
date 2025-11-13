@@ -26,7 +26,7 @@
 #define QD_TYPE_A (0x0001)
 #define ANS_TTL_SEC (300)
 
-static const char *TAG = "example_dns_redirect_server";
+static const char *TAG = "dns_redirect_server";
 
 // DNS Header Packet
 typedef struct __attribute__((__packed__))
@@ -252,7 +252,13 @@ void dns_server_task(void *pvParameters)
                     int err = sendto(sock, reply, reply_len, 0, (struct sockaddr *)&source_addr, sizeof(source_addr));
                     if (err < 0) {
                         ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                        break;
+                        // Don't break on ENOMEM (12) or ENOBUFS (105) - these are temporary resource issues
+                        // The socket is still valid, so continue processing other requests
+                        if (errno != ENOMEM && errno != ENOBUFS) {
+                            break;
+                        }
+                        // Brief delay to allow memory/buffers to be freed
+                        vTaskDelay(pdMS_TO_TICKS(10));
                     }
                 }
             }
