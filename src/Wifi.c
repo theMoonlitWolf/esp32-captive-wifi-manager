@@ -602,7 +602,7 @@ void wifi_init_ap() {
         };
         httpd_register_uri_handler(server, &sd_file_uri);
     } else {
-        // will not work, need to run wildcard handler even if no SD card to have captive redirect in AP mode
+        // need to run wildcard handler even if no SD card to have captive redirect in AP mode
         httpd_uri_t no_sd_card_uri = {
             .uri = "/*",
             .method = HTTP_GET,
@@ -926,7 +926,7 @@ void wifi_event_group_listener_task(void *pvParameter) {
             wifi_event_group,
             SWITCH_TO_STA_BIT | SWITCH_TO_AP_BIT | SWITCH_TO_CAPTIVE_AP_BIT | RECONECT_BIT | mDNS_CHANGE_BIT,
             pdFALSE, pdFALSE, portMAX_DELAY);
-        ESP_LOGD(TAG, "Recieved event bits: %s%s%s%s%s%s%s%s%s%s",
+        ESP_LOGD(TAG, "Received event bits: %s%s%s%s%s%s%s%s%s%s",
             eventBits & BIT9 ? "1" : "0",
             eventBits & BIT8 ? "1" : "0",
             eventBits & BIT7 ? "1" : "0",
