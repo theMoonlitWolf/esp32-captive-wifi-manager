@@ -1,22 +1,9 @@
-# Build directories
-build/
-**/build/
-
-# ESP-IDF managed components
-managed_components/
-**/managed_components/
-
-# ESP-IDF config and lock files
-**/dependencies.lock
-**/sdkconfig
-**/sdkconfig.old
-
 # IDE specific
-**/.vscode/.browse.c_cpp.db*
-**/.vscode/settings.json
-**/.vscode/launch.json
-**/.vscode/ipch/
-**/.devcontainer/
+.vscode/.browse.c_cpp.db*
+.vscode/settings.json
+.vscode/launch.json
+.vscode/ipch/
+.devcontainer/
 
 # Temp files
 .DS_Store
@@ -24,8 +11,3 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
-# Binary output files
-*.bin
-*.elf
-*.map

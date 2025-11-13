@@ -1,0 +1,15 @@
+# ESP-IDF build directories
+build/
+
+# ESP-IDF managed components
+managed_components/
+
+# ESP-IDF config and lock files
+dependencies.lock
+sdkconfig
+sdkconfig.old
+
+# Binary output files
+*.bin
+*.elf
+*.map
