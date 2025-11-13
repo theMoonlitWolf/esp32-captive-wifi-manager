@@ -1,3 +1,11 @@
+# IDE specific
+.vscode/.browse.c_cpp.db*
+.vscode/settings.json
+.vscode/launch.json
+.vscode/c_cpp_properties.json
+.vscode/ipch/
+.devcontainer/
+
 # ESP-IDF build directories
 build/
 
