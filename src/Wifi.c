@@ -276,6 +276,7 @@ esp_err_t wifi_init() {
     httpd_config.lru_purge_enable = true;
     httpd_config.max_uri_handlers = CONFIG_WIFI_MAX_CUSTOM_HTTP_HANDLERS + 8;
     httpd_config.uri_match_fn = httpd_uri_match_wildcard;
+    httpd_config.stack_size = 6144;  // Increase from default 4096 to handle captive portal detection bursts
     
     // Set up default HTTP server configuration
     ap_netif = esp_netif_create_default_wifi_ap();
@@ -1517,7 +1518,9 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
         !strcmp(req->uri, "/connecttest.txt") ||
         !strcmp(req->uri, "/hotspot-detect.html") ||
         !strcmp(req->uri, "/success.txt") ||
-        !strcmp(req->uri, "/redirect")) {
+        !strcmp(req->uri, "/redirect") ||
+        !strcmp(req->uri, "/204") ||
+        !strcmp(req->uri, "/ipv6check")) {
         
         ESP_LOGV(TAG, "Captive portal detection request: %s", req->uri);
         
@@ -1554,8 +1557,18 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
             ESP_LOGW(TAG, "Invalid socket fd: %d", sockfd);
         }
         
-        // First request from this IP: redirect to open popup
-        if (client_ip != 0 && !is_ip_redirected(client_ip)) {
+        // Handle captive portal detection based on specific URLs
+        // Android uses /generate_204, iOS uses /hotspot-detect.html, Windows uses multiple
+        
+        // For Microsoft NCSI (Windows) - return the exact expected content
+        if (!strcmp(req->uri, "/ncsi.txt") || !strcmp(req->uri, "/connecttest.txt")) {
+            httpd_resp_set_type(req, "text/plain");
+            httpd_resp_send(req, "Microsoft NCSI", HTTPD_RESP_USE_STRLEN);
+            return ESP_OK;
+        }
+        
+        // First request from this IP: redirect to open popup, or if /redirect is explicitly requested
+        if ((client_ip != 0 && !is_ip_redirected(client_ip))||!strcmp(req->uri, "/redirect")) {
             mark_ip_redirected(client_ip);
             
             char location[64];
@@ -1574,11 +1587,9 @@ esp_err_t sd_file_handler(httpd_req_t *req) {
             httpd_resp_send(req, NULL, 0);
             ESP_LOGI(TAG, "First captive detection, redirecting to %s", location);
             return ESP_OK;
-        } else if (client_ip == 0) {
-            ESP_LOGW(TAG, "Could not determine client IP, returning 204");
         }
         
-        // Subsequent requests or failed IP detection: silently return 204
+        // Subsequent requests: return 204
         httpd_resp_set_status(req, "204 No Content");
         httpd_resp_send(req, NULL, 0);
         return ESP_OK;
