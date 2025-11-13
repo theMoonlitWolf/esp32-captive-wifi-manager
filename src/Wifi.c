@@ -722,11 +722,11 @@ void get_nvs_wifi_settings(captive_portal_config *cfg) {
         nvs_get_str(nvs_handle, "ssid", cfg->ssid, &len);
         len = sizeof(cfg->password);
         nvs_get_str(nvs_handle, "password", cfg->password, &len);
+        nvs_get_u8(nvs_handle, "authmode", &cfg->authmode);
         len = sizeof(cfg->ap_ssid);
         nvs_get_str(nvs_handle, "ap_ssid", cfg->ap_ssid, &len);
         len = sizeof(cfg->ap_password);
         nvs_get_str(nvs_handle, "ap_password", cfg->ap_password, &len);
-        nvs_get_u8(nvs_handle, "ap_authmode", &cfg->authmode);
         nvs_get_u8(nvs_handle, "use_static_ip", (uint8_t*)&cfg->use_static_ip);
         nvs_get_u8(nvs_handle, "use_mDNS", (uint8_t*)&cfg->use_mDNS);
         nvs_get_u32(nvs_handle, "static_ip", &cfg->static_ip.addr);
@@ -761,16 +761,16 @@ void set_nvs_wifi_settings(captive_portal_config *cfg) {
             nvs_set_str(nvs_handle, "password", cfg->password);
             n++;
         }
+        if (cfg->authmode != saved_cfg.authmode) {
+            nvs_set_u8(nvs_handle, "authmode", cfg->authmode);
+            n++;
+        }
         if (strcmp(cfg->ap_ssid, saved_cfg.ap_ssid) != 0) {
             nvs_set_str(nvs_handle, "ap_ssid", cfg->ap_ssid);
             n++;
         }
         if (strcmp(cfg->ap_password, saved_cfg.ap_password) != 0) {
             nvs_set_str(nvs_handle, "ap_password", cfg->ap_password);
-            n++;
-        }
-        if (cfg->authmode != saved_cfg.authmode) {
-            nvs_set_u8(nvs_handle, "ap_authmode", cfg->authmode);
             n++;
         }
         if (cfg->use_static_ip != saved_cfg.use_static_ip) {
