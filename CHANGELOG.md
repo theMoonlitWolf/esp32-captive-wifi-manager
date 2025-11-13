@@ -8,23 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - v0.2.0
 
 ### Added
+
 - AP-only mode support for devices that don't need STA connection or in cases where no other (WPA2/FREE) AP is available
 - Improved captive portal logic and user experience
 - Better error handling and recovery mechanisms
 
 ### Fixed
+
 - Multiple bug fixes improving stability
 - Enhanced reconnection logic
 - Improved state management during mode transitions
 
 ### Changed
+
 - Refactored WiFi state machine for better reliability
 - Enhanced DNS server performance for captive portal
 - Optimized memory usage
 
 ### In Progress
-- Final testing and validation
-- Performance optimization
+
 - Documentation improvements
 
 ## [0.1.1] - 2025-11-01
