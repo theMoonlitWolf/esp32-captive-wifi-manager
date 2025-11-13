@@ -1077,7 +1077,6 @@ esp_err_t captive_error_redirect(httpd_req_t *req, httpd_err_code_t error) {
  */
 esp_err_t scan_json_handler(httpd_req_t *req) {
     ESP_LOGD(TAG_CAPTIVE, "Scan request received, starting WiFi scan...");
-    return ESP_FAIL; // Disable scanning for now for testing
     char json[700];
     uint16_t ap_count = 0;
     wifi_scan_config_t scan_config = {

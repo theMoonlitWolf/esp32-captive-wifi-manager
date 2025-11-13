@@ -6,6 +6,9 @@
 .vscode/ipch/
 .devcontainer/
 
+# ESP-IDF build directories if accidentally built component instead of example project
+build/
+
 # Temp files
 .DS_Store
 Thumbs.db

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -39,7 +39,7 @@
           <select id="ssid" name="ssid" required style="flex:1" onchange="updateAuthmode(this)">
             <option value="" disabled selected>Loading...</option>
           </select>
-          <button type="button" id="refreshBtn" title="Refresh Wi-Fi list">⟳</button>
+          <button type="button" id="refreshBtn" title="Refresh Wi-Fi list" onclick="getSSIDs(loadedSSID,loadedAuthmode)">⟳</button>
         </div>
         <div id="scanWarn" class="warning red">⚠️ Wi-Fi scan failed. Please enter SSID manually if needed.</div>
         <div id="enterpriseWarn" class="warning">⚠️ Enterprise networks are not supported. Please select a different network.</div>
@@ -77,7 +77,8 @@
   </form>
   <script>
     const g=id=>document.getElementById(id);
-    let loadedSSID=''; // Track the originally loaded SSID
+    let loadedSSID='';
+    let loadedAuthmode=-1;
     function toggle(id,show){g(id).style.display=show?'block':'none'}
     function toggleMode(mode){
       mode = Number(mode);
@@ -183,8 +184,8 @@
             i.type='text';i.id='ssid';i.name='ssid';i.value=sel||'';i.placeholder='Enter SSID';i.required=false;
             s.parentNode.replaceChild(i,s);
           }
-          g('password').disabled=true;
-          g('saveBtn').disabled=true;
+          g('password').disabled=false;
+          g('saveBtn').disabled=false;
           g('saveBtn').textContent='Save (no SSID available)';
           g('scanWarn').style.display='block';
         });
@@ -196,7 +197,8 @@
         .then(r=>r.json())
         .then(c=>{
           console.log('loadSettings: loaded config - ssid='+c.ssid+', authmode='+c.authmode+', static_ip='+c.use_static_ip+', mDNS='+c.use_mDNS);
-          loadedSSID=c.ssid||''; // Store the loaded SSID
+          loadedSSID=c.ssid||'';
+          loadedAuthmode=c.authmode!==undefined?c.authmode:-1;
           if(c.wifi_mode){g('wifi_mode').value=Number(c.wifi_mode);toggleMode(Number(c.wifi_mode))}
           getSSIDs(c.ssid||'',c.authmode!==undefined?c.authmode:-1);
           if(c.password){g('password').value='';g('password').placeholder='(unchanged)'}
@@ -219,7 +221,6 @@
           getSSIDs('',-1);
         });
     }
-    g('refreshBtn').onclick=()=>{console.log('Refresh button clicked');loadSettings()};
     window.onload=()=>{updateAuthmode(g('ssid'));loadSettings()};
   </script>
 </body>
