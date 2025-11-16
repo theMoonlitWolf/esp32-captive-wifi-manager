@@ -1,0 +1,70 @@
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+
+name: PR validation — Build & checks
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ESP-IDF
+        uses: espressif/setup-esp-idf@v2
+        with:
+          # adjust to the IDF version you support; can also be a matrix
+          idf_version: 'v5.1'
+
+      - name: Install helper packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck clang-format || true
+
+      - name: Install Python dev dependencies if present
+        run: |
+          if [ -f requirements-dev.txt ]; then
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements-dev.txt
+          else
+            echo "No requirements-dev.txt found, skipping"
+          fi
+
+      - name: Configure (set target if needed)
+        run: |
+          # idf.py set-target esp32  # uncomment and set target if your repo needs it
+          idf.py reconfigure || true
+
+      - name: Build
+        run: idf.py build
+
+      - name: Run unit tests (pytest) if tests/ exists
+        run: |
+          if [ -d tests ]; then
+            python -m pip install pytest || true
+            pytest -q tests || (echo "pytest failures" && exit 1)
+          else
+            echo "No tests/ dir, skipping pytest"
+          fi
+
+      - name: Static analysis (cppcheck)
+        run: |
+          if [ -f build/compile_commands.json ]; then
+            cppcheck --project=build/compile_commands.json --enable=warning,performance,portability --error-exitcode=1
+          else
+            echo "No build/compile_commands.json, skipping cppcheck"
+          fi
+
+      - name: Component size summary
+        run: idf.py size-components || true
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp-build
+          path: build/
