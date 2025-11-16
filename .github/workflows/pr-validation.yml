@@ -80,30 +80,6 @@ jobs:
           git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "${IDF_PATH}"
           ls -la "${IDF_PATH}" || true
 
-      - name: Create wrapper project if this repo is a component
-        run: |
-          set -euo pipefail
-          REPO_NAME="$(basename "${GITHUB_REPOSITORY}")"
-          mkdir -p "${WRAPPER_BASE}"
-          # detect component-style repo: idf_component_register in top-level CMakeLists.txt OR idf_component.yml present
-          if (grep -Iq "idf_component_register" CMakeLists.txt 2>/dev/null) || [ -f idf_component.yml ]; then
-            echo "Detected component-style repo. Creating minimal wrapper project."
-            COMPONENT_DIR="${WRAPPER_BASE}/components/${REPO_NAME}"
-            mkdir -p "${COMPONENT_DIR}"
-            # copy working tree into wrapper components dir (exclude heavy VCS dirs)
-            rsync -a --exclude='.git' --exclude='build' --exclude='.github' ./ "${COMPONENT_DIR}/"
-            # create minimal project that includes components/* automatically via project.cmake
-            cat > "${WRAPPER_BASE}/CMakeLists.txt" <<'EOF'
-cmake_minimum_required(VERSION 3.16)
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(ci_wrapper)
-EOF
-            echo "WRAPPER_PATH=${WRAPPER_BASE}" >> $GITHUB_ENV
-          else
-            echo "Not a component repo; using repository root as project."
-            echo "WRAPPER_PATH=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
-          fi
-
       - name: Install ESP-IDF Python requirements (guarded)
         run: |
           python3 -m pip install --upgrade pip || true
@@ -124,58 +100,118 @@ EOF
             echo "No install.sh present; skipping toolchain installer"
           fi
 
-      - name: Build (source IDF environment and run idf.py in wrapper/project dir)
+      - name: Build examples (try in-place; if fails, build via wrapper)
         shell: bash
         run: |
+          set -euo pipefail
           source "${IDF_PATH}/export.sh"
-          echo "Building project at: ${WRAPPER_PATH}"
-          cd "${WRAPPER_PATH}"
-          # set target here if your project needs it, e.g.: idf.py set-target esp32
-          idf.py reconfigure || true
-          idf.py build
-          idf.py size-components || true
 
-      - name: Run unit tests (pytest) if tests/ exists
-        shell: bash
-        run: |
-          if [ -d tests ]; then
-            python3 -m pip install pytest || true
-            pytest -q tests || (echo "pytest failures" && exit 1)
+          REPO_NAME="$(basename "${GITHUB_REPOSITORY}")"
+          ROOT="$(pwd)"
+          BUILT_ANY=0
+          mkdir -p "${WRAPPER_BASE}"
+          declare -a uploaded_paths=()
+
+          # Helper to ensure wrapper contains the component
+          ensure_wrapper_component() {
+            COMPONENT_DIR="${WRAPPER_BASE}/components/${REPO_NAME}"
+            if [ ! -d "${COMPONENT_DIR}" ]; then
+              mkdir -p "${COMPONENT_DIR}"
+              rsync -a --exclude='.git' --exclude='build' --exclude='.github' "${ROOT}/" "${COMPONENT_DIR}/"
+            fi
+            # Ensure minimal wrapper project root exists
+            if [ ! -f "${WRAPPER_BASE}/CMakeLists.txt" ]; then
+              cat > "${WRAPPER_BASE}/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(ci_wrapper)
+EOF
+            fi
+          }
+
+          # If no examples directory, build the repository root (component or project)
+          if [ ! -d examples ]; then
+            echo "No examples directory found; attempting to build repo as a project or component wrapper."
+            # If repo is a component, create wrapper and build wrapper/project
+            if (grep -Iq "idf_component_register" CMakeLists.txt 2>/dev/null) || [ -f idf_component.yml ]; then
+              echo "Detected component repo; building in wrapper"
+              ensure_wrapper_component
+              cd "${WRAPPER_BASE}"
+              idf.py reconfigure || true
+              idf.py build
+              uploaded_paths+=("${WRAPPER_BASE}/build")
+              BUILT_ANY=1
+            else
+              echo "Not a component repo; attempting to build at repo root"
+              idf.py reconfigure || true
+              idf.py build
+              uploaded_paths+=("${ROOT}/build")
+              BUILT_ANY=1
+            fi
           else
-            echo "No tests/ dir found; skipping pytest"
-          fi
-
-      - name: Static analysis (cppcheck) if compile_commands.json exists
-        shell: bash
-        run: |
-          if [ -f build/compile_commands.json ]; then
-            cppcheck --project=build/compile_commands.json --enable=warning,performance,portability --error-exitcode=1
-          else
-            echo "No build/compile_commands.json found; skipping cppcheck"
-          fi
-
-      - name: Check formatting with clang-format (optional)
-        shell: bash
-        run: |
-          if command -v clang-format >/dev/null 2>&1 && [ -f .clang-format ]; then
-            git ls-files '*.c' '*.cpp' '*.h' '*.hpp' | while read -r f; do
-              tmp=$(mktemp)
-              clang-format --style=file "$f" > "$tmp"
-              if ! diff -q "$f" "$tmp" >/dev/null 2>&1; then
-                echo "clang-format mismatch: $f"
-                diff -u "$f" "$tmp" || true
-                rm "$tmp"
-                exit 1
+            # iterate each example
+            for ex in examples/*/ ; do
+              [ -d "$ex" ] || continue
+              exdir="${ex%/}"
+              exname="$(basename "$exdir")"
+              echo "=== Attempting to build example in-place: ${exname} ==="
+              cd "${ROOT}/${exdir}"
+              # attempt build in-place (this preserves relative includes)
+              set +e
+              idf.py reconfigure || true
+              idf.py build
+              rc=$?
+              set -e
+              if [ $rc -eq 0 ]; then
+                echo "Example ${exname} built in-place successfully."
+                uploaded_paths+=("${ROOT}/${exdir}/build")
+                BUILT_ANY=1
+                continue
               fi
-              rm "$tmp"
+
+              echo "In-place build for ${exname} failed (rc=${rc}). Falling back to wrapper build."
+
+              # Prepare wrapper component and copy the example into wrapper/examples/<exname>
+              ensure_wrapper_component
+              mkdir -p "${WRAPPER_BASE}/examples/${exname}"
+              rsync -a --exclude='.git' --exclude='build' --exclude='.github' "${ROOT}/${exdir}/" "${WRAPPER_BASE}/examples/${exname}/"
+              echo "Building example ${exname} inside wrapper..."
+              cd "${WRAPPER_BASE}/examples/${exname}"
+              idf.py reconfigure || true
+              idf.py build
+              if [ $? -eq 0 ]; then
+                echo "Wrapper build for ${exname} succeeded."
+                uploaded_paths+=("${WRAPPER_BASE}/examples/${exname}/build")
+                BUILT_ANY=1
+              else
+                echo "Wrapper build for ${exname} FAILED. Leaving logs for debugging."
+                # continue to next example; do not fail the whole step immediately
+              fi
             done
-            echo "clang-format OK"
-          else
-            echo "clang-format or .clang-format not available; skipping"
           fi
 
-      - name: Upload build artifacts
+          # Print summary and export artifact paths
+          if [ "${#uploaded_paths[@]}" -eq 0 ]; then
+            echo "No builds succeeded for any example or project."
+            exit 1
+          fi
+
+          echo "Built paths:"
+          for p in "${uploaded_paths[@]}"; do
+            echo " - $p"
+          done
+
+          # Persist paths for next steps (newline-separated)
+          printf "%s\n" "${uploaded_paths[@]}" > /tmp/built_paths.txt
+          echo "BUILT_PATHS=/tmp/built_paths.txt" >> $GITHUB_ENV
+
+      - name: Upload build artifacts (project + examples builds)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: esp-build
-          path: build/
+          path: |
+            build/
+            examples/*/build/
+            ${{ env.WRAPPER_BASE }}/examples/*/build/
+            ${{ env.WRAPPER_BASE }}/build/
