@@ -7,7 +7,6 @@ on:
 name: PR validation — Build, tests, static analysis
 
 env:
-  # Use a concrete tag for reproducible builds, or set IDF_VERSION_RANGE and let the resolver pick a matching tag.
   IDF_VERSION_RANGE: '>=5.5.0'
 
 jobs:
@@ -18,15 +17,17 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set IDF_PATH (use runner temp dir)
-        run: echo "IDF_PATH=${RUNNER_TEMP}/esp-idf" >> $GITHUB_ENV
+      - name: Set IDF_PATH and temporary wrapper base
+        run: |
+          echo "IDF_PATH=${RUNNER_TEMP}/esp-idf" >> $GITHUB_ENV
+          echo "WRAPPER_BASE=${RUNNER_TEMP}/idf-wrapper" >> $GITHUB_ENV
 
-      - name: Install helper packages (jq, dpkg, etc.)
+      - name: Install helper packages (jq, dpkg, rsync, etc.)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git wget make cmake ninja-build ccache python3 python3-pip python3-venv \
-            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format jq dpkg || true
+            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format jq dpkg rsync || true
 
       - name: Resolve ESP-IDF tag from range (if any)
         run: |
@@ -73,54 +74,63 @@ jobs:
           echo "Resolved tag: v${chosen}"
           echo "IDF_VERSION=v${chosen}" >> $GITHUB_ENV
 
-      - name: Show resolved IDF_VERSION and IDF_PATH
-        run: |
-          echo "IDF_VERSION=${IDF_VERSION:-<unset>}"
-          echo "IDF_PATH=${IDF_PATH:-<unset>}"
-          ls -la "${RUNNER_TEMP}" | sed -n '1,120p' || true
-
       - name: Clone ESP-IDF (${IDF_VERSION})
         run: |
           echo "Cloning esp-idf ${IDF_VERSION} into ${IDF_PATH}"
           git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "${IDF_PATH}"
-          echo "Clone complete; listing ${IDF_PATH}:"
           ls -la "${IDF_PATH}" || true
 
-      - name: Install ESP-IDF Python requirements (guarded + debug)
+      - name: Create wrapper project if this repo is a component
         run: |
-          # upgrade pip first (user install ok on runners)
-          python3 -m pip install --upgrade pip || true
-          if [ -f "${IDF_PATH}/requirements.txt" ]; then
-            echo "Installing ${IDF_PATH}/requirements.txt"
-            python3 -m pip install -r "${IDF_PATH}/requirements.txt"
+          set -euo pipefail
+          REPO_NAME="$(basename "${GITHUB_REPOSITORY}")"
+          mkdir -p "${WRAPPER_BASE}"
+          # detect component-style repo: idf_component_register in top-level CMakeLists.txt OR idf_component.yml present
+          if (grep -Iq "idf_component_register" CMakeLists.txt 2>/dev/null) || [ -f idf_component.yml ]; then
+            echo "Detected component-style repo. Creating minimal wrapper project."
+            COMPONENT_DIR="${WRAPPER_BASE}/components/${REPO_NAME}"
+            mkdir -p "${COMPONENT_DIR}"
+            # copy working tree into wrapper components dir (exclude heavy VCS dirs)
+            rsync -a --exclude='.git' --exclude='build' --exclude='.github' ./ "${COMPONENT_DIR}/"
+            # create minimal project that includes components/* automatically via project.cmake
+            cat > "${WRAPPER_BASE}/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(ci_wrapper)
+EOF
+            echo "WRAPPER_PATH=${WRAPPER_BASE}" >> $GITHUB_ENV
           else
-            echo "WARNING: ${IDF_PATH}/requirements.txt not found."
-            echo "Listing ${IDF_PATH} to help debug:"
-            ls -la "${IDF_PATH}" || true
-            # Also try common alternative locations (older/newpack layouts)
-            if [ -f "${IDF_PATH}/tools/requirements.txt" ]; then
-              echo "Found tools/requirements.txt; installing that"
-              python3 -m pip install -r "${IDF_PATH}/tools/requirements.txt"
-            else
-              echo "No requirements file found in esp-idf checkout. Continuing without installing esp-idf python deps."
-              echo "Note: idf.py may fail later if required Python packages are missing."
-            fi
+            echo "Not a component repo; using repository root as project."
+            echo "WRAPPER_PATH=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
           fi
 
-      - name: Run esp-idf install script (best-effort, may download toolchains)
+      - name: Install ESP-IDF Python requirements (guarded)
+        run: |
+          python3 -m pip install --upgrade pip || true
+          if [ -f "${IDF_PATH}/requirements.txt" ]; then
+            python3 -m pip install -r "${IDF_PATH}/requirements.txt"
+          elif [ -f "${IDF_PATH}/tools/requirements.txt" ]; then
+            python3 -m pip install -r "${IDF_PATH}/tools/requirements.txt"
+          else
+            echo "No requirements file found in esp-idf checkout; proceeding (may fail if deps missing)."
+          fi
+
+      - name: Run esp-idf install script (best-effort)
         run: |
           set -e
           if [ -x "${IDF_PATH}/install.sh" ]; then
             "${IDF_PATH}/install.sh" || echo "install.sh failed or required interaction; continuing"
           else
-            echo "No install.sh present or not executable; skipping"
+            echo "No install.sh present; skipping toolchain installer"
           fi
 
-      - name: Build (source IDF environment and run idf.py)
+      - name: Build (source IDF environment and run idf.py in wrapper/project dir)
         shell: bash
         run: |
           source "${IDF_PATH}/export.sh"
-          # set target if needed: idf.py set-target esp32
+          echo "Building project at: ${WRAPPER_PATH}"
+          cd "${WRAPPER_PATH}"
+          # set target here if your project needs it, e.g.: idf.py set-target esp32
           idf.py reconfigure || true
           idf.py build
           idf.py size-components || true
@@ -144,28 +154,24 @@ jobs:
             echo "No build/compile_commands.json found; skipping cppcheck"
           fi
 
-      - name: Check formatting with clang-format (optional, fails on mismatch)
+      - name: Check formatting with clang-format (optional)
         shell: bash
         run: |
           if command -v clang-format >/dev/null 2>&1 && [ -f .clang-format ]; then
-            mismatches=0
             git ls-files '*.c' '*.cpp' '*.h' '*.hpp' | while read -r f; do
               tmp=$(mktemp)
               clang-format --style=file "$f" > "$tmp"
               if ! diff -q "$f" "$tmp" >/dev/null 2>&1; then
                 echo "clang-format mismatch: $f"
                 diff -u "$f" "$tmp" || true
-                mismatches=1
+                rm "$tmp"
+                exit 1
               fi
               rm "$tmp"
             done
-            if [ "$mismatches" -ne 0 ]; then
-              echo "clang-format mismatches detected"
-              exit 1
-            fi
             echo "clang-format OK"
           else
-            echo "clang-format or .clang-format not available; skipping format check"
+            echo "clang-format or .clang-format not available; skipping"
           fi
 
       - name: Upload build artifacts
