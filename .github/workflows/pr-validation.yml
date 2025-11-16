@@ -2,68 +2,104 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   push:
-    branches:
-      - main
+    branches: [ main ]
 
-name: PR validation — Build & checks
+name: PR validation — Build, tests, static analysis
+
+env:
+  IDF_VERSION: 'v5.5.0'
+  IDF_PATH: ${{ runner.temp }}/esp-idf    # where esp-idf will be cloned
 
 jobs:
   build:
-    name: build
+    name: Build & validate
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup ESP-IDF
-        uses: espressif/setup-esp-idf@v2
-        with:
-          # adjust to the IDF version you support; can also be a matrix
-          idf_version: 'v5.1'
-
-      - name: Install helper packages
+      - name: Install system packages (apt)
         run: |
           sudo apt-get update
-          sudo apt-get install -y cppcheck clang-format || true
+          sudo apt-get install -y --no-install-recommends \
+            git wget make cmake ninja-build ccache python3 python3-pip python3-venv \
+            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format || true
 
-      - name: Install Python dev dependencies if present
+      - name: Clone ESP-IDF (${IDF_VERSION})
         run: |
-          if [ -f requirements-dev.txt ]; then
-            python -m pip install --upgrade pip
-            python -m pip install -r requirements-dev.txt
+          git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "${IDF_PATH}"
+          ls -la "${IDF_PATH}"
+
+      - name: Install ESP-IDF Python requirements
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r "${IDF_PATH}/requirements.txt"
+
+      - name: Run esp-idf install script (best-effort, may download toolchains)
+        run: |
+          set -e
+          if [ -x "${IDF_PATH}/install.sh" ]; then
+            # try to run the install script; if it fails because of interactivity, continue (best-effort)
+            "${IDF_PATH}/install.sh" || echo "install.sh failed or required interaction; continuing"
           else
-            echo "No requirements-dev.txt found, skipping"
+            echo "No install.sh present or not executable; skipping"
           fi
 
-      - name: Configure (set target if needed)
+      - name: Build (source IDF environment and run idf.py)
+        shell: bash
         run: |
-          # idf.py set-target esp32  # uncomment and set target if your repo needs it
+          # source export to put idf tools on PATH for this shell
+          source "${IDF_PATH}/export.sh"
+          # set target if needed (uncomment and change)
+          # idf.py set-target esp32
           idf.py reconfigure || true
-
-      - name: Build
-        run: idf.py build
+          idf.py build
+          idf.py size-components || true
 
       - name: Run unit tests (pytest) if tests/ exists
+        shell: bash
         run: |
           if [ -d tests ]; then
-            python -m pip install pytest || true
+            python3 -m pip install pytest || true
             pytest -q tests || (echo "pytest failures" && exit 1)
           else
-            echo "No tests/ dir, skipping pytest"
+            echo "No tests/ dir found; skipping pytest"
           fi
 
-      - name: Static analysis (cppcheck)
+      - name: Static analysis (cppcheck) if compile_commands.json exists
+        shell: bash
         run: |
           if [ -f build/compile_commands.json ]; then
             cppcheck --project=build/compile_commands.json --enable=warning,performance,portability --error-exitcode=1
           else
-            echo "No build/compile_commands.json, skipping cppcheck"
+            echo "No build/compile_commands.json found; skipping cppcheck"
           fi
 
-      - name: Component size summary
-        run: idf.py size-components || true
+      - name: Check formatting with clang-format (optional, fails on mismatch)
+        shell: bash
+        run: |
+          if command -v clang-format >/dev/null 2>&1 && [ -f .clang-format ]; then
+            mismatches=0
+            git ls-files '*.c' '*.cpp' '*.h' '*.hpp' | while read -r f; do
+              tmp=$(mktemp)
+              clang-format --style=file "$f" > "$tmp"
+              if ! diff -q "$f" "$tmp" >/dev/null 2>&1; then
+                echo "clang-format mismatch: $f"
+                diff -u "$f" "$tmp" || true
+                mismatches=1
+              fi
+              rm "$tmp"
+            done
+            if [ "$mismatches" -ne 0 ]; then
+              echo "clang-format mismatches detected"
+              exit 1
+            fi
+            echo "clang-format OK"
+          else
+            echo "clang-format or .clang-format not available; skipping format check"
+          fi
 
-      - name: Upload build artifact
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: esp-build
