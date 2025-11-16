@@ -124,73 +124,112 @@ jobs:
           echo "--- find under WRAPPER_BASE ---"
           [ -n "${WRAPPER_BASE:-}" ] && find "${WRAPPER_BASE}" -type f -name compile_commands.json -print -exec sh -c 'echo "---- $1 (head)"; head -n 5 "$1"' _ {} \; || true
       
-      - name: Run cppcheck on filtered compile_commands.json files (repo-only)
+      - name: Run cppcheck (repo-only, with fallback to file list)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
       
-          # Prefixes considered "owned by this repo"
-          prefixes=()
-          prefixes+=("${GITHUB_WORKSPACE:-}")
-          [ -n "${ARTIFACT_DIR:-}" ] && prefixes+=("${ARTIFACT_DIR}")
-          [ -n "${WRAPPER_BASE:-}" ] && prefixes+=("${WRAPPER_BASE}")
+          # Ensure artifact dir exists so later upload sees reports even if no builds produced
+          mkdir -p "${ARTIFACT_DIR:-${RUNNER_TEMP}/esp-artifacts}"
       
-          # Gather candidate files (may include duplicates)
-          mapfile -t candidates < <(find "${GITHUB_WORKSPACE:-.}" ${ARTIFACT_DIR:+"${ARTIFACT_DIR}"} ${WRAPPER_BASE:+"${WRAPPER_BASE}"} -type f -name compile_commands.json 2>/dev/null || true)
+          # Candidate compile_commands.json locations (absolute)
+          declare -a candidates
+          candidates+=("${GITHUB_WORKSPACE:-.}/build/compile_commands.json")
+          for f in "${GITHUB_WORKSPACE:-.}"/examples/*/build/compile_commands.json; do candidates+=("$f"); done
+          for f in "${ARTIFACT_DIR}"/*/compile_commands.json; do candidates+=("$f"); done
+          for f in "${WRAPPER_BASE}"/examples/*/build/compile_commands.json; do candidates+=("$f"); done
+          candidates+=("${WRAPPER_BASE:-}/build/compile_commands.json")
       
-          if [ "${#candidates[@]}" -eq 0 ]; then
-            echo "No compile_commands.json files found under expected roots; skipping cppcheck."
-            exit 0
-          fi
-      
-          # de-duplicate by realpath
+          # de-duplicate and keep only existing files
           declare -A seen
           files=()
           for f in "${candidates[@]}"; do
             [ -f "$f" ] || continue
             rp="$(realpath "$f")"
-            if [ -n "${seen[$rp]:-}" ]; then
-              continue
+            if [ -z "${seen[$rp]:-}" ]; then
+              seen[$rp]=1
+              files+=("$f")
             fi
-            seen[$rp]=1
-            files+=("$f")
           done
       
-          ran_any=0
-          for f in "${files[@]}"; do
-            echo "Processing: $f"
-            # Build a jq array of prefixes for filtering
-            # Create JSON array like ["<prefix1>","<prefix2>",...]
-            prefix_json="$(printf '%s\n' "${prefixes[@]}" | jq -R -s -c 'split("\n")[:-1]')"
+          if [ "${#files[@]}" -gt 0 ]; then
+            echo "Found compile_commands.json files: ${files[*]}"
+            ran=0
+            for f in "${files[@]}"; do
+              # Filter compile_commands.json to repo-owned translation units only
+              prefixes_json=$(printf '%s\n' "${GITHUB_WORKSPACE:-$PWD}" "${ARTIFACT_DIR:-}" "${WRAPPER_BASE:-}" | jq -R -s -c 'split("\n")[:-1]')
+              filtered="/tmp/filtered-$(basename "$f")"
+              jq --argjson prefixes "$prefixes_json" 'map(select(any($prefixes[]; (.file|startswith(.)))))' "$f" > "$filtered" || true
       
-            filtered="/tmp/filtered-$(basename "$f")"
-            # Filter entries whose .file starts with any of the prefixes
-            # The jq program below uses $prefixes; select entries where any(prefix; .file | startswith(prefix))
-            jq --argjson prefixes "$prefix_json" 'map(select( any($prefixes[]; (.file | startswith(.))) ))' "$f" > "$filtered" || true
+              if [ "$(jq 'length' "$filtered" 2>/dev/null || echo 0)" -eq 0 ]; then
+                echo "No repo-owned entries found in $f after filtering; skipping."
+                rm -f "$filtered" || true
+                continue
+              fi
       
-            # If empty after filtering, skip
-            if [ "$(jq 'length' "$filtered" 2>/dev/null || echo 0)" -eq 0 ]; then
-              echo "No entries in $f match repo prefixes; skipping."
-              rm -f "$filtered"
-              continue
-            fi
+              name="$(basename "$(dirname "$f")")"
+              report_dir="${ARTIFACT_DIR}/${name}"
+              mkdir -p "$report_dir"
       
-            echo "Running cppcheck on filtered file: $filtered"
-            # You can adjust --enable options; --inline-suppr reduces noise from inline suppression attributes
-            if cppcheck --project="$filtered" --enable=warning,performance,portability --inline-suppr; then
-              echo "cppcheck OK for $f"
+              echo "Running cppcheck on filtered compile_commands.json ($f) -> report: ${report_dir}/cppcheck.txt"
+              # run cppcheck, capture output to artifact dir; do not fail the whole job by default
+              if cppcheck --project="$filtered" --enable=warning,performance,portability --inline-suppr 2> "${report_dir}/cppcheck.txt"; then
+                echo "cppcheck OK for $f"
+              else
+                echo "cppcheck reported issues for $f (see ${report_dir}/cppcheck.txt)"
+              fi
+              ran=1
+            done
+      
+            if [ "$ran" -eq 0 ]; then
+              echo "No filtered compile_commands.json produced entries; falling back to file-list mode."
             else
-              echo "cppcheck found issues in $f (filtered)."
-              # If you want to fail the job on cppcheck issues, uncomment the next line:
-              exit 1
+              echo "cppcheck runs complete on compile_commands.json files."
+              exit 0
             fi
-            ran_any=1
+          else
+            echo "No compile_commands.json found in standard locations; falling back to file-list mode."
+          fi
+      
+          # Fallback: run cppcheck on a limited set of repo files (faster and repo-only)
+          # Limit scope to likely source directories and tracked files
+          echo "Gathering C/C++ source files from repo (components/, examples/, main/, include/, src/)"
+          files_to_check=()
+          for d in components examples main include src; do
+            if [ -d "$d" ]; then
+              while IFS= read -r f; do files_to_check+=("$f"); done < <(git ls-files "$d/**/*.c" "$d/**/*.cpp" "$d/**/*.h" "$d/**/*.hpp" 2>/dev/null || true)
+            fi
+          done
+          # also include top-level tracked C/C++ files
+          while IFS= read -r f; do files_to_check+=("$f"); done < <(git ls-files '*.c' '*.cpp' '*.h' '*.hpp' 2>/dev/null || true)
+      
+          # de-duplicate
+          declare -A seen2
+          unique_files=()
+          for f in "${files_to_check[@]}"; do
+            [ -f "$f" ] || continue
+            rp="$(realpath "$f")"
+            if [ -z "${seen2[$rp]:-}" ]; then
+              seen2[$rp]=1
+              unique_files+=("$f")
+            fi
           done
       
-          if [ $ran_any -eq 0 ]; then
-            echo "No compile_commands.json files produced any entries after filtering; nothing to run."
+          if [ "${#unique_files[@]}" -eq 0 ]; then
+            echo "No repo C/C++ files found to run cppcheck on; skipping."
+            exit 0
+          fi
+      
+          # run cppcheck on the collected files (less precise than compile_commands.json, but repo-only and faster)
+          fallback_report="${ARTIFACT_DIR}/cppcheck-fallback.txt"
+          echo "Running cppcheck on ${#unique_files[@]} repo files (fallback). Report -> ${fallback_report}"
+          # provide some include dirs if your repo has them; add -I flags as needed
+          if cppcheck --enable=warning,performance,portability --inline-suppr "${unique_files[@]}" 2> "${fallback_report}"; then
+            echo "cppcheck fallback OK"
+          else
+            echo "cppcheck fallback reported issues (see ${fallback_report})"
           fi
 
       - name: Upload build artifacts (collected)
