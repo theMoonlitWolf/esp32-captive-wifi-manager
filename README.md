@@ -114,7 +114,7 @@ dependencies:
   esp32-captive-wifi-manager:
     git: https://github.com/theMoonlitWolf/esp32-captive-wifi-manager.git
     path: "."
-    version: v0.2.0
+    version: v0.2.1 #Replace with desired version
 ```
 
 2. Add it to your `INCLUDE_DIRS` in `CMakeLists.txt`:
