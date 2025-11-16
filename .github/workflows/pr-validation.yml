@@ -1,4 +1,5 @@
 on:
+  workflow_dispatch: {}
   pull_request:
     types: [opened, synchronize, reopened]
   push:
@@ -7,12 +8,10 @@ on:
 name: PR validation — Build & checks (components & examples)
 
 env:
-  # You can set a semver range here (the workflow will resolve to the newest matching tag).
   IDF_VERSION_RANGE: '>=5.5.0'
 
 jobs:
   build:
-    name: Build & validate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
@@ -22,6 +21,7 @@ jobs:
         run: |
           echo "IDF_PATH=${RUNNER_TEMP}/esp-idf" >> $GITHUB_ENV
           echo "WRAPPER_BASE=${RUNNER_TEMP}/idf-wrapper" >> $GITHUB_ENV
+          echo "ARTIFACT_DIR=${RUNNER_TEMP}/esp-artifacts" >> $GITHUB_ENV
 
       - name: Install helper packages
         run: |
@@ -81,6 +81,7 @@ jobs:
           echo "IDF_VERSION=${IDF_VERSION:-<unset>}"
           echo "IDF_PATH=${IDF_PATH:-<unset>}"
           echo "WRAPPER_BASE=${WRAPPER_BASE:-<unset>}"
+          echo "ARTIFACT_DIR=${ARTIFACT_DIR:-<unset>}"
 
       - name: Clone esp-idf
         run: |
@@ -96,7 +97,7 @@ jobs:
           elif [ -f "${IDF_PATH}/tools/requirements.txt" ]; then
             python3 -m pip install -r "${IDF_PATH}/tools/requirements.txt"
           else
-            echo "No esp-idf requirements.txt found; continuing (idf.py may still work if dependencies are satisfied)"
+            echo "No esp-idf requirements.txt found; continuing"
           fi
 
       - name: Run esp-idf install script (best-effort)
@@ -117,6 +118,7 @@ jobs:
           ROOT="$(pwd)"
           REPO_NAME="$(basename "${GITHUB_REPOSITORY}")"
           mkdir -p "${WRAPPER_BASE}"
+          mkdir -p "${ARTIFACT_DIR}"
           uploaded_paths=()
 
           ensure_wrapper_component() {
@@ -126,11 +128,10 @@ jobs:
               rsync -a --exclude='.git' --exclude='build' --exclude='.github' "${ROOT}/" "${COMPONENT_DIR}/"
             fi
             if [ ! -f "${WRAPPER_BASE}/CMakeLists.txt" ]; then
-              cat > "${WRAPPER_BASE}/CMakeLists.txt" <<'EOF'
-            cmake_minimum_required(VERSION 3.16)
-            include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-            project(ci_wrapper)
-            EOF
+              # Use printf instead of a here-doc to avoid YAML/here-doc termination issues.
+              printf '%s\n' "cmake_minimum_required(VERSION 3.16)" \
+                "include(\$ENV{IDF_PATH}/tools/cmake/project.cmake)" \
+                "project(ci_wrapper)" > "${WRAPPER_BASE}/CMakeLists.txt"
             fi
           }
 
@@ -188,24 +189,23 @@ jobs:
             exit 1
           fi
 
-          # Print and persist built paths for debug; upload step uses glob patterns below too.
-          echo "Built artifact paths:"
+          # copy successful builds into artifact dir under per-example subdirs
           for p in "${uploaded_paths[@]}"; do
-            echo " - $p"
+            # sanitize path name for directory name
+            name="$(basename "$(dirname "$p")")"
+            dest="${ARTIFACT_DIR}/${name}"
+            mkdir -p "${dest}"
+            rsync -a "${p}/" "${dest}/" || true
+            echo "Copied $p -> $dest"
           done
-          printf "%s\n" "${uploaded_paths[@]}" > /tmp/built_paths.txt
-          echo "BUILT_PATHS=/tmp/built_paths.txt" >> $GITHUB_ENV
 
-      - name: Upload build artifacts (project + examples + wrapper builds)
+      - name: Upload build artifacts (collected)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: esp-build
           path: |
-            build/
-            examples/*/build/
-            ${{ env.WRAPPER_BASE }}/examples/*/build/
-            ${{ env.WRAPPER_BASE }}/build/
+            ${{ env.ARTIFACT_DIR }}
 
       - name: Run cppcheck on available compile_commands.json files (best-effort)
         if: always()
@@ -213,10 +213,7 @@ jobs:
         run: |
           set -euo pipefail
           found=0
-          if [ -f build/compile_commands.json ]; then
-            cppcheck --project=build/compile_commands.json --enable=warning,performance,portability --error-exitcode=1 && found=1 || true
-          fi
-          for f in examples/*/build/compile_commands.json ${{ env.WRAPPER_BASE }}/examples/*/build/compile_commands.json ${{ env.WRAPPER_BASE }}/build/compile_commands.json 2>/dev/null; do
+          for f in "${ARTIFACT_DIR}"/*/compile_commands.json build/compile_commands.json examples/*/build/compile_commands.json "${WRAPPER_BASE}"/examples/*/build/compile_commands.json "${WRAPPER_BASE}"/build/compile_commands.json 2>/dev/null; do
             if [ -f "$f" ]; then
               echo "Running cppcheck on $f"
               cppcheck --project="$f" --enable=warning,performance,portability --error-exitcode=1 && found=1 || true
