@@ -206,23 +206,40 @@ jobs:
           name: esp-build
           path: |
             ${{ env.ARTIFACT_DIR }}
-
       - name: Run cppcheck on available compile_commands.json files (best-effort)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           found=0
-          for f in "${ARTIFACT_DIR}"/*/compile_commands.json build/compile_commands.json examples/*/build/compile_commands.json "${WRAPPER_BASE}"/examples/*/build/compile_commands.json "${WRAPPER_BASE}"/build/compile_commands.json 2>/dev/null; do
-            if [ -f "$f" ]; then
-              echo "Running cppcheck on $f"
-              cppcheck --project="$f" --enable=warning,performance,portability --error-exitcode=1 && found=1 || true
+          # allow globs that don't match to expand to empty
+          shopt -s nullglob
+      
+          files=()
+          files+=("${ARTIFACT_DIR}"/*/compile_commands.json)
+          files+=("build/compile_commands.json")
+          files+=("examples"/*/build/compile_commands.json)
+          files+=("${WRAPPER_BASE}"/examples/*/build/compile_commands.json)
+          files+=("${WRAPPER_BASE}"/build/compile_commands.json)
+      
+          # iterate only actual files
+          for f in "${files[@]}"; do
+            [ -f "$f" ] || continue
+            echo "Running cppcheck on: $f"
+            # run cppcheck; do not let a non-zero result abort the whole workflow here
+            if cppcheck --project="$f" --enable=warning,performance,portability --error-exitcode=1; then
+              echo "cppcheck OK: $f"
+              found=1
+            else
+              echo "cppcheck reported issues for: $f"
+              # mark that we ran cppcheck (and it found issues), but keep going
+              found=1
             fi
           done
+      
           if [ "$found" -eq 0 ]; then
             echo "No compile_commands.json found for cppcheck; skipping static analysis"
           fi
-
       - name: Optional clang-format check (fail on mismatch)
         if: always()
         shell: bash
