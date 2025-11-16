@@ -108,8 +108,8 @@ jobs:
           else
             echo "No install.sh present; skipping toolchain installer"
           fi
-
-      - name: Debug: list compile_commands.json found
+      
+      - name: Debug - list compile_commands.json found
         if: always()
         shell: bash
         run: |
