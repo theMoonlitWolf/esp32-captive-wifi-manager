@@ -105,6 +105,24 @@ You can override the LED color at any time using `wifi_set_led_rgb()` for custom
 
 ### Installation
 
+#### Via IDF Component Manager
+
+1. Add dependency to your project's `idf_component.yml` manifest:
+
+```yml
+dependencies:
+  esp32-captive-wifi-manager:
+    git: https://github.com/theMoonlitWolf/esp32-captive-wifi-manager.git
+    path: "."
+    version: v0.2.0
+```
+
+2. Add it to your `INCLUDE_DIRS` in `CMakeLists.txt`:
+
+```CMake
+INCLUDE_DIRS managed_components/esp32-captive-wifi-manager/include
+```
+
 #### Manual Installation
 
 1. Clone or download this repository into your project's `components` directory:
