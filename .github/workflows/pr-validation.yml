@@ -6,7 +6,7 @@ on:
 
 name: PR validation — Build, tests, static analysis
 
-# Set IDF version here (use tag form, e.g. v5.5.0)
+# Pin a concrete esp-idf tag (tags use a leading "v", e.g. v5.5.0)
 env:
   IDF_VERSION: 'v5.5.0'
 
@@ -14,20 +14,19 @@ jobs:
   build:
     name: Build & validate
     runs-on: ubuntu-latest
-    # runner.* contexts are only available at job/step scope, so set IDF_PATH here.
-    env:
-      IDF_PATH: ${{ runner.temp }}/esp-idf
-      IDF_VERSION: ${{ env.IDF_VERSION }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Set IDF_PATH (use runner temp dir)
+        run: echo "IDF_PATH=${RUNNER_TEMP}/esp-idf" >> $GITHUB_ENV
 
       - name: Install system packages (apt)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git wget make cmake ninja-build ccache python3 python3-pip python3-venv \
-            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format jq dpkg || true
+            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format jq || true
 
       - name: Clone ESP-IDF (${IDF_VERSION})
         run: |
