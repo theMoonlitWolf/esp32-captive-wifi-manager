@@ -4,9 +4,10 @@ on:
   push:
     branches: [ main ]
 
-name: PR validation — Build, tests, static analysis
+name: PR validation — Build & checks (components & examples)
 
 env:
+  # You can set a semver range here (the workflow will resolve to the newest matching tag).
   IDF_VERSION_RANGE: '>=5.5.0'
 
 jobs:
@@ -17,19 +18,20 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set IDF_PATH and temporary wrapper base
+      - name: Prepare runner paths
         run: |
           echo "IDF_PATH=${RUNNER_TEMP}/esp-idf" >> $GITHUB_ENV
           echo "WRAPPER_BASE=${RUNNER_TEMP}/idf-wrapper" >> $GITHUB_ENV
 
-      - name: Install helper packages (jq, dpkg, rsync, etc.)
+      - name: Install helper packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git wget make cmake ninja-build ccache python3 python3-pip python3-venv \
-            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format jq dpkg rsync || true
+            build-essential libncurses-dev flex bison gperf libssl-dev \
+            cppcheck clang-format jq dpkg rsync || true
 
-      - name: Resolve ESP-IDF tag from range (if any)
+      - name: Resolve esp-idf tag from range (or use default)
         run: |
           set -euo pipefail
           RANGE="${IDF_VERSION_RANGE:-}"
@@ -74,13 +76,19 @@ jobs:
           echo "Resolved tag: v${chosen}"
           echo "IDF_VERSION=v${chosen}" >> $GITHUB_ENV
 
-      - name: Clone ESP-IDF (${IDF_VERSION})
+      - name: Show resolved vars
+        run: |
+          echo "IDF_VERSION=${IDF_VERSION:-<unset>}"
+          echo "IDF_PATH=${IDF_PATH:-<unset>}"
+          echo "WRAPPER_BASE=${WRAPPER_BASE:-<unset>}"
+
+      - name: Clone esp-idf
         run: |
           echo "Cloning esp-idf ${IDF_VERSION} into ${IDF_PATH}"
           git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "${IDF_PATH}"
           ls -la "${IDF_PATH}" || true
 
-      - name: Install ESP-IDF Python requirements (guarded)
+      - name: Install esp-idf python requirements (guarded)
         run: |
           python3 -m pip install --upgrade pip || true
           if [ -f "${IDF_PATH}/requirements.txt" ]; then
@@ -88,7 +96,7 @@ jobs:
           elif [ -f "${IDF_PATH}/tools/requirements.txt" ]; then
             python3 -m pip install -r "${IDF_PATH}/tools/requirements.txt"
           else
-            echo "No requirements file found in esp-idf checkout; proceeding (may fail if deps missing)."
+            echo "No esp-idf requirements.txt found; continuing (idf.py may still work if dependencies are satisfied)"
           fi
 
       - name: Run esp-idf install script (best-effort)
@@ -100,26 +108,23 @@ jobs:
             echo "No install.sh present; skipping toolchain installer"
           fi
 
-      - name: Build examples (try in-place; if fails, build via wrapper)
+      - name: Build examples (try in-place first; fallback to wrapper)
         shell: bash
         run: |
           set -euo pipefail
           source "${IDF_PATH}/export.sh"
 
-          REPO_NAME="$(basename "${GITHUB_REPOSITORY}")"
           ROOT="$(pwd)"
-          BUILT_ANY=0
+          REPO_NAME="$(basename "${GITHUB_REPOSITORY}")"
           mkdir -p "${WRAPPER_BASE}"
-          declare -a uploaded_paths=()
+          uploaded_paths=()
 
-          # Helper to ensure wrapper contains the component
           ensure_wrapper_component() {
             COMPONENT_DIR="${WRAPPER_BASE}/components/${REPO_NAME}"
             if [ ! -d "${COMPONENT_DIR}" ]; then
               mkdir -p "${COMPONENT_DIR}"
               rsync -a --exclude='.git' --exclude='build' --exclude='.github' "${ROOT}/" "${COMPONENT_DIR}/"
             fi
-            # Ensure minimal wrapper project root exists
             if [ ! -f "${WRAPPER_BASE}/CMakeLists.txt" ]; then
               cat > "${WRAPPER_BASE}/CMakeLists.txt" <<'EOF'
 cmake_minimum_required(VERSION 3.16)
@@ -129,83 +134,69 @@ EOF
             fi
           }
 
-          # If no examples directory, build the repository root (component or project)
+          # If no examples directory, build repo root (project) or wrapper (component)
           if [ ! -d examples ]; then
-            echo "No examples directory found; attempting to build repo as a project or component wrapper."
-            # If repo is a component, create wrapper and build wrapper/project
+            echo "No examples dir: building repo root or wrapper"
             if (grep -Iq "idf_component_register" CMakeLists.txt 2>/dev/null) || [ -f idf_component.yml ]; then
-              echo "Detected component repo; building in wrapper"
+              echo "Component repo detected; building via wrapper"
               ensure_wrapper_component
               cd "${WRAPPER_BASE}"
               idf.py reconfigure || true
               idf.py build
               uploaded_paths+=("${WRAPPER_BASE}/build")
-              BUILT_ANY=1
             else
-              echo "Not a component repo; attempting to build at repo root"
+              echo "Project repo detected; building at repo root"
               idf.py reconfigure || true
               idf.py build
               uploaded_paths+=("${ROOT}/build")
-              BUILT_ANY=1
             fi
           else
-            # iterate each example
+            # iterate examples, try in-place build first to preserve relative includes
             for ex in examples/*/ ; do
               [ -d "$ex" ] || continue
               exdir="${ex%/}"
               exname="$(basename "$exdir")"
-              echo "=== Attempting to build example in-place: ${exname} ==="
+              echo "=== Building example in-place: ${exname} ==="
               cd "${ROOT}/${exdir}"
-              # attempt build in-place (this preserves relative includes)
               set +e
               idf.py reconfigure || true
               idf.py build
               rc=$?
               set -e
               if [ $rc -eq 0 ]; then
-                echo "Example ${exname} built in-place successfully."
+                echo "Built in-place: ${exname}"
                 uploaded_paths+=("${ROOT}/${exdir}/build")
-                BUILT_ANY=1
                 continue
               fi
-
-              echo "In-place build for ${exname} failed (rc=${rc}). Falling back to wrapper build."
-
-              # Prepare wrapper component and copy the example into wrapper/examples/<exname>
+              echo "In-place build failed for ${exname}; falling back to wrapper build"
               ensure_wrapper_component
               mkdir -p "${WRAPPER_BASE}/examples/${exname}"
               rsync -a --exclude='.git' --exclude='build' --exclude='.github' "${ROOT}/${exdir}/" "${WRAPPER_BASE}/examples/${exname}/"
-              echo "Building example ${exname} inside wrapper..."
               cd "${WRAPPER_BASE}/examples/${exname}"
               idf.py reconfigure || true
-              idf.py build
-              if [ $? -eq 0 ]; then
-                echo "Wrapper build for ${exname} succeeded."
+              if idf.py build; then
+                echo "Wrapper build succeeded for ${exname}"
                 uploaded_paths+=("${WRAPPER_BASE}/examples/${exname}/build")
-                BUILT_ANY=1
               else
-                echo "Wrapper build for ${exname} FAILED. Leaving logs for debugging."
-                # continue to next example; do not fail the whole step immediately
+                echo "Wrapper build FAILED for ${exname}; continuing with next example"
               fi
             done
           fi
 
-          # Print summary and export artifact paths
           if [ "${#uploaded_paths[@]}" -eq 0 ]; then
-            echo "No builds succeeded for any example or project."
+            echo "ERROR: No successful builds. Exiting with failure."
             exit 1
           fi
 
-          echo "Built paths:"
+          # Print and persist built paths for debug; upload step uses glob patterns below too.
+          echo "Built artifact paths:"
           for p in "${uploaded_paths[@]}"; do
             echo " - $p"
           done
-
-          # Persist paths for next steps (newline-separated)
           printf "%s\n" "${uploaded_paths[@]}" > /tmp/built_paths.txt
           echo "BUILT_PATHS=/tmp/built_paths.txt" >> $GITHUB_ENV
 
-      - name: Upload build artifacts (project + examples builds)
+      - name: Upload build artifacts (project + examples + wrapper builds)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -215,3 +206,47 @@ EOF
             examples/*/build/
             ${{ env.WRAPPER_BASE }}/examples/*/build/
             ${{ env.WRAPPER_BASE }}/build/
+
+      - name: Run cppcheck on available compile_commands.json files (best-effort)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          if [ -f build/compile_commands.json ]; then
+            cppcheck --project=build/compile_commands.json --enable=warning,performance,portability --error-exitcode=1 && found=1 || true
+          fi
+          for f in examples/*/build/compile_commands.json ${{ env.WRAPPER_BASE }}/examples/*/build/compile_commands.json ${{ env.WRAPPER_BASE }}/build/compile_commands.json 2>/dev/null; do
+            if [ -f "$f" ]; then
+              echo "Running cppcheck on $f"
+              cppcheck --project="$f" --enable=warning,performance,portability --error-exitcode=1 && found=1 || true
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No compile_commands.json found for cppcheck; skipping static analysis"
+          fi
+
+      - name: Optional clang-format check (fail on mismatch)
+        if: always()
+        shell: bash
+        run: |
+          if command -v clang-format >/dev/null 2>&1 && [ -f .clang-format ]; then
+            mismatches=0
+            git ls-files '*.c' '*.cpp' '*.h' '*.hpp' | while read -r f; do
+              tmp=$(mktemp)
+              clang-format --style=file "$f" > "$tmp"
+              if ! diff -q "$f" "$tmp" >/dev/null 2>&1; then
+                echo "clang-format mismatch: $f"
+                diff -u "$f" "$tmp" || true
+                mismatches=1
+              fi
+              rm "$tmp"
+            done
+            if [ "$mismatches" -ne 0 ]; then
+              echo "clang-format mismatches detected"
+              exit 1
+            fi
+            echo "clang-format OK"
+          else
+            echo "clang-format or .clang-format not available; skipping format check"
+          fi
