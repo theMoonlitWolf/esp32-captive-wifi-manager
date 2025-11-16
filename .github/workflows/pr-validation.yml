@@ -127,10 +127,10 @@ jobs:
             fi
             if [ ! -f "${WRAPPER_BASE}/CMakeLists.txt" ]; then
               cat > "${WRAPPER_BASE}/CMakeLists.txt" <<'EOF'
-cmake_minimum_required(VERSION 3.16)
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(ci_wrapper)
-EOF
+            cmake_minimum_required(VERSION 3.16)
+            include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+            project(ci_wrapper)
+            EOF
             fi
           }
 
