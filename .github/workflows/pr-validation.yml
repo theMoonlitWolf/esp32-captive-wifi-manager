@@ -108,84 +108,89 @@ jobs:
           else
             echo "No install.sh present; skipping toolchain installer"
           fi
+
+      - name: Debug: list compile_commands.json found
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "GITHUB_WORKSPACE: ${GITHUB_WORKSPACE:-<unset>}"
+          echo "ARTIFACT_DIR: ${ARTIFACT_DIR:-<unset>}"
+          echo "WRAPPER_BASE: ${WRAPPER_BASE:-<unset>}"
+          echo "--- find under GITHUB_WORKSPACE ---"
+          find "${GITHUB_WORKSPACE:-.}" -type f -name compile_commands.json -print -exec sh -c 'echo "---- $1 (head)"; head -n 5 "$1"' _ {} \; || true
+          echo "--- find under ARTIFACT_DIR ---"
+          [ -n "${ARTIFACT_DIR:-}" ] && find "${ARTIFACT_DIR}" -type f -name compile_commands.json -print -exec sh -c 'echo "---- $1 (head)"; head -n 5 "$1"' _ {} \; || true
+          echo "--- find under WRAPPER_BASE ---"
+          [ -n "${WRAPPER_BASE:-}" ] && find "${WRAPPER_BASE}" -type f -name compile_commands.json -print -exec sh -c 'echo "---- $1 (head)"; head -n 5 "$1"' _ {} \; || true
       
-      - name: Run cppcheck on available compile_commands.json files (filtered to repo files)
+      - name: Run cppcheck on filtered compile_commands.json files (repo-only)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
       
-          # directories we consider "owned by this repo" (keep entries whose file paths start with any of these)
-          KEEP_DIRS=()
-          KEEP_DIRS+=("${GITHUB_WORKSPACE:-$PWD}")   # repo checkout root
-          KEEP_DIRS+=("${ARTIFACT_DIR:-}")
-          KEEP_DIRS+=("${WRAPPER_BASE:-}")
+          # Prefixes considered "owned by this repo"
+          prefixes=()
+          prefixes+=("${GITHUB_WORKSPACE:-}")
+          [ -n "${ARTIFACT_DIR:-}" ] && prefixes+=("${ARTIFACT_DIR}")
+          [ -n "${WRAPPER_BASE:-}" ] && prefixes+=("${WRAPPER_BASE}")
       
-          # gather candidate compile_commands.json files (de-duplicated)
-          declare -A seen
-          files=()
-          for f in "${ARTIFACT_DIR}"/*/compile_commands.json build/compile_commands.json examples/*/build/compile_commands.json "${WRAPPER_BASE}"/examples/*/build/compile_commands.json "${WRAPPER_BASE}"/build/compile_commands.json; do
-            [ -f "$f" ] || continue
-            realf="$(realpath "$f")"
-            if [ -z "${seen[$realf]}" ]; then
-              seen[$realf]=1
-              files+=("$f")
-            fi
-          done
+          # Gather candidate files (may include duplicates)
+          mapfile -t candidates < <(find "${GITHUB_WORKSPACE:-.}" ${ARTIFACT_DIR:+"${ARTIFACT_DIR}"} ${WRAPPER_BASE:+"${WRAPPER_BASE}"} -type f -name compile_commands.json 2>/dev/null || true)
       
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "No compile_commands.json found for cppcheck; skipping static analysis"
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "No compile_commands.json files found under expected roots; skipping cppcheck."
             exit 0
           fi
       
+          # de-duplicate by realpath
+          declare -A seen
+          files=()
+          for f in "${candidates[@]}"; do
+            [ -f "$f" ] || continue
+            rp="$(realpath "$f")"
+            if [ -n "${seen[$rp]:-}" ]; then
+              continue
+            fi
+            seen[$rp]=1
+            files+=("$f")
+          done
+      
           ran_any=0
           for f in "${files[@]}"; do
-            echo "Processing compile_commands.json: $f"
-            # build jq filter that keeps entries whose .file starts with any KEEP_DIRS entry
-            jq_expr='[ .[] | select('
-            first=1
-            for d in "${KEEP_DIRS[@]}"; do
-              [ -z "$d" ] && continue
-              # ensure absolute canonical form for reliable matching
-              d_abs="$(realpath -m "$d")"
-              # escape backslashes and quotes for jq string literal
-              d_esc="${d_abs//\\/\\\\}"
-              d_esc="${d_esc//\"/\\\"}"
-              if [ $first -eq 1 ]; then
-                jq_expr+="(.file | startswith(\"${d_esc}\"))"
-                first=0
-              else
-                jq_expr+=" or (.file | startswith(\"${d_esc}\"))"
-              fi
-            done
-            jq_expr+=') ]'
+            echo "Processing: $f"
+            # Build a jq array of prefixes for filtering
+            # Create JSON array like ["<prefix1>","<prefix2>",...]
+            prefix_json="$(printf '%s\n' "${prefixes[@]}" | jq -R -s -c 'split("\n")[:-1]')"
       
             filtered="/tmp/filtered-$(basename "$f")"
-            # create filtered compile_commands.json keeping only repo-owned files
-            jq --argfile dummy /dev/null "$jq_expr" "$f" > "$filtered" || true
+            # Filter entries whose .file starts with any of the prefixes
+            # The jq program below uses $prefixes; select entries where any(prefix; .file | startswith(prefix))
+            jq --argjson prefixes "$prefix_json" 'map(select( any($prefixes[]; (.file | startswith(.))) ))' "$f" > "$filtered" || true
       
-            # if filtered list is empty, skip
+            # If empty after filtering, skip
             if [ "$(jq 'length' "$filtered" 2>/dev/null || echo 0)" -eq 0 ]; then
-              echo "No source files from this repo found in $f after filtering; skipping."
+              echo "No entries in $f match repo prefixes; skipping."
               rm -f "$filtered"
               continue
             fi
       
-            echo "Running cppcheck on filtered compile_commands.json: $filtered"
-            # Run cppcheck on the filtered project file. Adjust --enable and --inline-suppr as you prefer.
-            if cppcheck --project="$filtered" --enable=warning,performance,portability --inline-suppr --error-exitcode=1; then
+            echo "Running cppcheck on filtered file: $filtered"
+            # You can adjust --enable options; --inline-suppr reduces noise from inline suppression attributes
+            if cppcheck --project="$filtered" --enable=warning,performance,portability --inline-suppr; then
               echo "cppcheck OK for $f"
             else
-              echo "cppcheck found issues in $f (filtered); see output above."
-              # If you prefer cppcheck failures to fail CI, uncomment the next line:
-              # exit 1
+              echo "cppcheck found issues in $f (filtered)."
+              # If you want to fail the job on cppcheck issues, uncomment the next line:
+              exit 1
             fi
             ran_any=1
           done
       
           if [ $ran_any -eq 0 ]; then
-            echo "No compile_commands.json produced any entries after filtering; skipping cppcheck."
+            echo "No compile_commands.json files produced any entries after filtering; nothing to run."
           fi
 
       - name: Upload build artifacts (collected)
@@ -195,40 +200,7 @@ jobs:
           name: esp-build
           path: |
             ${{ env.ARTIFACT_DIR }}
-      - name: Run cppcheck on available compile_commands.json files (best-effort)
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          found=0
-          # allow globs that don't match to expand to empty
-          shopt -s nullglob
-      
-          files=()
-          files+=("${ARTIFACT_DIR}"/*/compile_commands.json)
-          files+=("build/compile_commands.json")
-          files+=("examples"/*/build/compile_commands.json)
-          files+=("${WRAPPER_BASE}"/examples/*/build/compile_commands.json)
-          files+=("${WRAPPER_BASE}"/build/compile_commands.json)
-      
-          # iterate only actual files
-          for f in "${files[@]}"; do
-            [ -f "$f" ] || continue
-            echo "Running cppcheck on: $f"
-            # run cppcheck; do not let a non-zero result abort the whole workflow here
-            if cppcheck --project="$f" --enable=warning,performance,portability --error-exitcode=1; then
-              echo "cppcheck OK: $f"
-              found=1
-            else
-              echo "cppcheck reported issues for: $f"
-              # mark that we ran cppcheck (and it found issues), but keep going
-              found=1
-            fi
-          done
-      
-          if [ "$found" -eq 0 ]; then
-            echo "No compile_commands.json found for cppcheck; skipping static analysis"
-          fi
+     
       - name: Optional clang-format check (fail on mismatch)
         if: always()
         shell: bash
