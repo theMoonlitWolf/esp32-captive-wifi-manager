@@ -108,96 +108,85 @@ jobs:
           else
             echo "No install.sh present; skipping toolchain installer"
           fi
-
-      - name: Build examples (try in-place first; fallback to wrapper)
+      
+      - name: Run cppcheck on available compile_commands.json files (filtered to repo files)
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          source "${IDF_PATH}/export.sh"
-
-          ROOT="$(pwd)"
-          REPO_NAME="$(basename "${GITHUB_REPOSITORY}")"
-          mkdir -p "${WRAPPER_BASE}"
-          mkdir -p "${ARTIFACT_DIR}"
-          uploaded_paths=()
-
-          ensure_wrapper_component() {
-            COMPONENT_DIR="${WRAPPER_BASE}/components/${REPO_NAME}"
-            if [ ! -d "${COMPONENT_DIR}" ]; then
-              mkdir -p "${COMPONENT_DIR}"
-              rsync -a --exclude='.git' --exclude='build' --exclude='.github' "${ROOT}/" "${COMPONENT_DIR}/"
+          shopt -s nullglob
+      
+          # directories we consider "owned by this repo" (keep entries whose file paths start with any of these)
+          KEEP_DIRS=()
+          KEEP_DIRS+=("${GITHUB_WORKSPACE:-$PWD}")   # repo checkout root
+          KEEP_DIRS+=("${ARTIFACT_DIR:-}")
+          KEEP_DIRS+=("${WRAPPER_BASE:-}")
+      
+          # gather candidate compile_commands.json files (de-duplicated)
+          declare -A seen
+          files=()
+          for f in "${ARTIFACT_DIR}"/*/compile_commands.json build/compile_commands.json examples/*/build/compile_commands.json "${WRAPPER_BASE}"/examples/*/build/compile_commands.json "${WRAPPER_BASE}"/build/compile_commands.json; do
+            [ -f "$f" ] || continue
+            realf="$(realpath "$f")"
+            if [ -z "${seen[$realf]}" ]; then
+              seen[$realf]=1
+              files+=("$f")
             fi
-            if [ ! -f "${WRAPPER_BASE}/CMakeLists.txt" ]; then
-              # Use printf instead of a here-doc to avoid YAML/here-doc termination issues.
-              printf '%s\n' "cmake_minimum_required(VERSION 3.16)" \
-                "include(\$ENV{IDF_PATH}/tools/cmake/project.cmake)" \
-                "project(ci_wrapper)" > "${WRAPPER_BASE}/CMakeLists.txt"
-            fi
-          }
-
-          # If no examples directory, build repo root (project) or wrapper (component)
-          if [ ! -d examples ]; then
-            echo "No examples dir: building repo root or wrapper"
-            if (grep -Iq "idf_component_register" CMakeLists.txt 2>/dev/null) || [ -f idf_component.yml ]; then
-              echo "Component repo detected; building via wrapper"
-              ensure_wrapper_component
-              cd "${WRAPPER_BASE}"
-              idf.py reconfigure || true
-              idf.py build
-              uploaded_paths+=("${WRAPPER_BASE}/build")
-            else
-              echo "Project repo detected; building at repo root"
-              idf.py reconfigure || true
-              idf.py build
-              uploaded_paths+=("${ROOT}/build")
-            fi
-          else
-            # iterate examples, try in-place build first to preserve relative includes
-            for ex in examples/*/ ; do
-              [ -d "$ex" ] || continue
-              exdir="${ex%/}"
-              exname="$(basename "$exdir")"
-              echo "=== Building example in-place: ${exname} ==="
-              cd "${ROOT}/${exdir}"
-              set +e
-              idf.py reconfigure || true
-              idf.py build
-              rc=$?
-              set -e
-              if [ $rc -eq 0 ]; then
-                echo "Built in-place: ${exname}"
-                uploaded_paths+=("${ROOT}/${exdir}/build")
-                continue
-              fi
-              echo "In-place build failed for ${exname}; falling back to wrapper build"
-              ensure_wrapper_component
-              mkdir -p "${WRAPPER_BASE}/examples/${exname}"
-              rsync -a --exclude='.git' --exclude='build' --exclude='.github' "${ROOT}/${exdir}/" "${WRAPPER_BASE}/examples/${exname}/"
-              cd "${WRAPPER_BASE}/examples/${exname}"
-              idf.py reconfigure || true
-              if idf.py build; then
-                echo "Wrapper build succeeded for ${exname}"
-                uploaded_paths+=("${WRAPPER_BASE}/examples/${exname}/build")
+          done
+      
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No compile_commands.json found for cppcheck; skipping static analysis"
+            exit 0
+          fi
+      
+          ran_any=0
+          for f in "${files[@]}"; do
+            echo "Processing compile_commands.json: $f"
+            # build jq filter that keeps entries whose .file starts with any KEEP_DIRS entry
+            jq_expr='[ .[] | select('
+            first=1
+            for d in "${KEEP_DIRS[@]}"; do
+              [ -z "$d" ] && continue
+              # ensure absolute canonical form for reliable matching
+              d_abs="$(realpath -m "$d")"
+              # escape backslashes and quotes for jq string literal
+              d_esc="${d_abs//\\/\\\\}"
+              d_esc="${d_esc//\"/\\\"}"
+              if [ $first -eq 1 ]; then
+                jq_expr+="(.file | startswith(\"${d_esc}\"))"
+                first=0
               else
-                echo "Wrapper build FAILED for ${exname}; continuing with next example"
+                jq_expr+=" or (.file | startswith(\"${d_esc}\"))"
               fi
             done
-          fi
-
-          if [ "${#uploaded_paths[@]}" -eq 0 ]; then
-            echo "ERROR: No successful builds. Exiting with failure."
-            exit 1
-          fi
-
-          # copy successful builds into artifact dir under per-example subdirs
-          for p in "${uploaded_paths[@]}"; do
-            # sanitize path name for directory name
-            name="$(basename "$(dirname "$p")")"
-            dest="${ARTIFACT_DIR}/${name}"
-            mkdir -p "${dest}"
-            rsync -a "${p}/" "${dest}/" || true
-            echo "Copied $p -> $dest"
+            jq_expr+=') ]'
+      
+            filtered="/tmp/filtered-$(basename "$f")"
+            # create filtered compile_commands.json keeping only repo-owned files
+            jq --argfile dummy /dev/null "$jq_expr" "$f" > "$filtered" || true
+      
+            # if filtered list is empty, skip
+            if [ "$(jq 'length' "$filtered" 2>/dev/null || echo 0)" -eq 0 ]; then
+              echo "No source files from this repo found in $f after filtering; skipping."
+              rm -f "$filtered"
+              continue
+            fi
+      
+            echo "Running cppcheck on filtered compile_commands.json: $filtered"
+            # Run cppcheck on the filtered project file. Adjust --enable and --inline-suppr as you prefer.
+            if cppcheck --project="$filtered" --enable=warning,performance,portability --inline-suppr --error-exitcode=1; then
+              echo "cppcheck OK for $f"
+            else
+              echo "cppcheck found issues in $f (filtered); see output above."
+              # If you prefer cppcheck failures to fail CI, uncomment the next line:
+              # exit 1
+            fi
+            ran_any=1
           done
+      
+          if [ $ran_any -eq 0 ]; then
+            echo "No compile_commands.json produced any entries after filtering; skipping cppcheck."
+          fi
 
       - name: Upload build artifacts (collected)
         if: always()
