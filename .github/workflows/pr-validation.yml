@@ -6,11 +6,9 @@ on:
 
 name: PR validation — Build, tests, static analysis
 
-# Option A: pin a specific tag (recommended for reproducible builds)
-# IDF_VERSION: 'v5.5.0'
-# Option B: use a semver range and let the workflow resolve it to the latest matching tag
 env:
-  IDF_VERSION_RANGE: '>=5.5.0'    # change or clear this; if empty the workflow will fall back to IDF_VERSION_OVERRIDE or a pinned default
+  # Use a concrete tag for reproducible builds, or set IDF_VERSION_RANGE and let the resolver pick a matching tag.
+  IDF_VERSION_RANGE: '>=5.5.0'
 
 jobs:
   build:
@@ -31,35 +29,17 @@ jobs:
             build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format jq dpkg || true
 
       - name: Resolve ESP-IDF tag from range (if any)
-        id: resolve_idf
         run: |
           set -euo pipefail
-          # Priority:
-          # 1) If user set IDF_VERSION_OVERRIDE (explicit tag like v5.5.1), use it
-          # 2) Else, if IDF_VERSION_RANGE is set (e.g. ">=5.5.0"), query GitHub tags and pick newest matching
-          # 3) Else fall back to a hard-coded default (v5.5.0)
-          if [ -n "${IDF_VERSION_OVERRIDE:-}" ]; then
-            echo "Using explicit override: ${IDF_VERSION_OVERRIDE}"
-            echo "IDF_VERSION=${IDF_VERSION_OVERRIDE}" >> $GITHUB_ENV
-            exit 0
-          fi
-
           RANGE="${IDF_VERSION_RANGE:-}"
           if [ -z "$RANGE" ]; then
-            # default fallback (change if you want another pinned version)
             echo "IDF_VERSION=v5.5.0" >> $GITHUB_ENV
-            echo "No range provided; defaulting to v5.5.0"
             exit 0
           fi
-
-          # Normalize min version from range like ">=5.5.0" or "5.5.0"
           MIN_VERSION="${RANGE#>=}"
           MIN_VERSION="${MIN_VERSION#>}"
           MIN_VERSION="${MIN_VERSION#=}"
           MIN_VERSION="${MIN_VERSION#v}"
-          echo "Resolving esp-idf tag for minimum version: ${MIN_VERSION}"
-
-          # Fetch tags pages (100 per page) until no more results (handles many tags)
           TMP_TAGS="/tmp/esp-tags.txt"
           : > "${TMP_TAGS}"
           page=1
@@ -72,18 +52,14 @@ jobs:
             echo "$resp" | jq -r '.[].name' >> "${TMP_TAGS}"
             page=$((page+1))
           done
-
           if [ ! -s "${TMP_TAGS}" ]; then
             echo "Failed to retrieve tags; falling back to v${MIN_VERSION}"
             echo "IDF_VERSION=v${MIN_VERSION}" >> $GITHUB_ENV
             exit 0
           fi
-
-          # normalize and filter numeric tags, sort descending, pick first >= MIN_VERSION
           sed 's/^v//' "${TMP_TAGS}" \
             | grep -E '^[0-9]+(\.[0-9]+){1,2}$' \
             | sort -V -r > /tmp/esp-tags.filtered
-
           chosen=""
           while read -r ver; do
             if dpkg --compare-versions "$ver" ge "$MIN_VERSION"; then
@@ -91,30 +67,45 @@ jobs:
               break
             fi
           done < /tmp/esp-tags.filtered
-
           if [ -z "$chosen" ]; then
-            echo "No tag >= ${MIN_VERSION} found; falling back to ${MIN_VERSION}"
             chosen="${MIN_VERSION}"
           fi
-
           echo "Resolved tag: v${chosen}"
           echo "IDF_VERSION=v${chosen}" >> $GITHUB_ENV
 
       - name: Show resolved IDF_VERSION and IDF_PATH
         run: |
-          echo "IDF_VERSION=$IDF_VERSION"
-          echo "IDF_PATH=$IDF_PATH"
+          echo "IDF_VERSION=${IDF_VERSION:-<unset>}"
+          echo "IDF_PATH=${IDF_PATH:-<unset>}"
+          ls -la "${RUNNER_TEMP}" | sed -n '1,120p' || true
 
       - name: Clone ESP-IDF (${IDF_VERSION})
         run: |
           echo "Cloning esp-idf ${IDF_VERSION} into ${IDF_PATH}"
           git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "${IDF_PATH}"
-          ls -la "${IDF_PATH}"
+          echo "Clone complete; listing ${IDF_PATH}:"
+          ls -la "${IDF_PATH}" || true
 
-      - name: Install ESP-IDF Python requirements
+      - name: Install ESP-IDF Python requirements (guarded + debug)
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r "${IDF_PATH}/requirements.txt"
+          # upgrade pip first (user install ok on runners)
+          python3 -m pip install --upgrade pip || true
+          if [ -f "${IDF_PATH}/requirements.txt" ]; then
+            echo "Installing ${IDF_PATH}/requirements.txt"
+            python3 -m pip install -r "${IDF_PATH}/requirements.txt"
+          else
+            echo "WARNING: ${IDF_PATH}/requirements.txt not found."
+            echo "Listing ${IDF_PATH} to help debug:"
+            ls -la "${IDF_PATH}" || true
+            # Also try common alternative locations (older/newpack layouts)
+            if [ -f "${IDF_PATH}/tools/requirements.txt" ]; then
+              echo "Found tools/requirements.txt; installing that"
+              python3 -m pip install -r "${IDF_PATH}/tools/requirements.txt"
+            else
+              echo "No requirements file found in esp-idf checkout. Continuing without installing esp-idf python deps."
+              echo "Note: idf.py may fail later if required Python packages are missing."
+            fi
+          fi
 
       - name: Run esp-idf install script (best-effort, may download toolchains)
         run: |
