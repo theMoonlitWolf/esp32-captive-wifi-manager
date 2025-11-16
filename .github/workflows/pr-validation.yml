@@ -6,14 +6,18 @@ on:
 
 name: PR validation — Build, tests, static analysis
 
+# Set IDF version here (use tag form, e.g. v5.5.0)
 env:
   IDF_VERSION: 'v5.5.0'
-  IDF_PATH: ${{ runner.temp }}/esp-idf    # where esp-idf will be cloned
 
 jobs:
   build:
     name: Build & validate
     runs-on: ubuntu-latest
+    # runner.* contexts are only available at job/step scope, so set IDF_PATH here.
+    env:
+      IDF_PATH: ${{ runner.temp }}/esp-idf
+      IDF_VERSION: ${{ env.IDF_VERSION }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -23,10 +27,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git wget make cmake ninja-build ccache python3 python3-pip python3-venv \
-            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format || true
+            build-essential libncurses-dev flex bison gperf libssl-dev cppcheck clang-format jq dpkg || true
 
       - name: Clone ESP-IDF (${IDF_VERSION})
         run: |
+          echo "Cloning esp-idf ${IDF_VERSION} into ${IDF_PATH}"
           git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "${IDF_PATH}"
           ls -la "${IDF_PATH}"
 
@@ -39,7 +44,6 @@ jobs:
         run: |
           set -e
           if [ -x "${IDF_PATH}/install.sh" ]; then
-            # try to run the install script; if it fails because of interactivity, continue (best-effort)
             "${IDF_PATH}/install.sh" || echo "install.sh failed or required interaction; continuing"
           else
             echo "No install.sh present or not executable; skipping"
@@ -48,10 +52,8 @@ jobs:
       - name: Build (source IDF environment and run idf.py)
         shell: bash
         run: |
-          # source export to put idf tools on PATH for this shell
           source "${IDF_PATH}/export.sh"
-          # set target if needed (uncomment and change)
-          # idf.py set-target esp32
+          # set target if needed: idf.py set-target esp32
           idf.py reconfigure || true
           idf.py build
           idf.py size-components || true
